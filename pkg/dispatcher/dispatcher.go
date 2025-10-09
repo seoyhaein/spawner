@@ -58,14 +58,25 @@ func (d *Dispatcher) Handle(ctx context.Context, in frontdoor.ResolveInput, sink
 	if created {
 		select {
 		case d.Sem <- struct{}{}:
+
 			act.OnTerminate(func() { <-d.Sem })
+			// TODO 생각해보기.
+			// go act.Loop(ctx)
 		default:
 			return ErrSaturated
 		}
 	}
+	s := sink
+	if s == nil {
+		if d.defaultSink != nil {
+			s = d.defaultSink
+		} else {
+			s = NoopSink{}
+		}
+	}
 
 	// attach sink coming from transport
-	rr.Cmd.Sink = eventSinkAdapter{sink}
+	rr.Cmd.Sink = eventSinkAdapter{s}
 
 	if ok := act.Enqueue(rr.Cmd); !ok {
 		return errors.New("mailbox full")
