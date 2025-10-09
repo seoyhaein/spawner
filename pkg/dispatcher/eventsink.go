@@ -9,6 +9,8 @@ import (
 	"github.com/seoyhaein/spawner/pkg/api"
 )
 
+// TODO 테스트 및 디버깅 용으로 사용. 향후 grpc sink 로 대체 가능
+
 type NoopSink struct{}
 
 func (NoopSink) Send(api.Event) {}
