@@ -2,10 +2,10 @@ package dispatcher
 
 import (
 	"context"
-	"errors"
 
 	"github.com/seoyhaein/spawner/pkg/actor"
 	"github.com/seoyhaein/spawner/pkg/api"
+	sErr "github.com/seoyhaein/spawner/pkg/error"
 	"github.com/seoyhaein/spawner/pkg/frontdoor"
 )
 
@@ -17,8 +17,8 @@ type Dispatcher struct {
 	defaultSink EventSink // 지정 안 하면 NoopSink 사용
 }
 
-var ErrSaturated = errors.New("dispatcher saturated: max concurrent actors reached")
-
+// Deprecated: Use NewDispatcher instead.
+// New is deprecated.
 func New(fd frontdoor.FrontDoor, af actor.Factory, maxActors int) *Dispatcher {
 	return &Dispatcher{
 		FD:  fd,
@@ -26,6 +26,7 @@ func New(fd frontdoor.FrontDoor, af actor.Factory, maxActors int) *Dispatcher {
 		Sem: make(chan struct{}, maxActors)}
 }
 
+// NewDispatcher TODO 테스트 필요.
 func NewDispatcher(fd frontdoor.FrontDoor, af actor.Factory, semSize int, opts ...Option) *Dispatcher {
 	d := &Dispatcher{
 		FD: fd,
@@ -63,7 +64,7 @@ func (d *Dispatcher) Handle(ctx context.Context, in frontdoor.ResolveInput, sink
 			// TODO 생각해보기.
 			// go act.Loop(ctx)
 		default:
-			return ErrSaturated
+			return sErr.ErrSaturated
 		}
 	}
 	s := sink
@@ -79,7 +80,7 @@ func (d *Dispatcher) Handle(ctx context.Context, in frontdoor.ResolveInput, sink
 	rr.Cmd.Sink = eventSinkAdapter{s}
 
 	if ok := act.Enqueue(rr.Cmd); !ok {
-		return errors.New("mailbox full")
+		return sErr.ErrMailboxFull
 	}
 	return nil
 }
