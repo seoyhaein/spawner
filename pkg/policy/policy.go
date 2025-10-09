@@ -5,6 +5,7 @@ import "time"
 // 추후 생각해봐야 할 문제들이 있음.
 // 연결 끊김 취소 신호를 판단하기 위한 정책 및 기타 정잭들.
 // Principal 예약어 사용??
+
 // TODO actor = slot 생각해야함.
 
 type DisconnectPolicy uint8

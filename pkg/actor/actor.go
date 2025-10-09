@@ -17,6 +17,10 @@ type Actor interface {
 	Loop(context.Context)
 }
 
+// TODO 사실 이 SpawnActor 의 경우, k8s_driver.go 와 같이 맞춰주어야 하는 부분임.
+// TODO 그리고, 이것은 드라이버와 밀접하게 관계되기 때문에, 그렇게 개발되어야함. Actor 와 분리되어야 함.
+// TODO 즉, 이곳에 있는 것이라 아니라, 다른 티어에서 개발되어야 하는 곳임. driver 에 맞춰서 Loop 를 개발해야 함.
+
 type SpawnActor struct {
 	key string
 	mb  *Mailbox[api.Command]

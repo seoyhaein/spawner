@@ -34,7 +34,7 @@ func runRule() fdr.Rule {
 func main() {
 	r := fdr.NewTableFrontDoor(runRule())
 	af := actor.NewFactoryInMem(
-		func(key string) driver.Driver { return k8s.New() }, // ★ 인터페이스 타입으로 반환
+		func(key string) driver.Driver { return k8s.New() }, // 인터페이스 타입으로 반환
 		128,
 	)
 	d := dispatcher.New(r, af, 2)

@@ -9,6 +9,8 @@ import (
 
 // TODO 팩토리 패턴으로 별도의 인터페이스를 만들어서 이렇게 actor 를 만들어주는 형태로 해주었는데, 이거 코드만 늘어나는 거 같은데.
 // TODO driver 를 연결시켜주는 문제가 있어서 인터페이스를 빼는 것이 더 낳을 수도 있다라는 생각도 있음.
+// TODO factory 같은 경우, actor 에도 작성했지만, 향후 구현된 actor SpawnActor 같은 곳이 다른 곳에서 개발될때,
+// TODO 이것을 넣어줄 수 있는 factory 코드가 확장되어야 함.
 
 type Factory interface {
 	GetOrCreate(spawnKey string) (Actor, bool, error)
