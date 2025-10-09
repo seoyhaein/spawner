@@ -11,7 +11,7 @@ import (
 
 // Wire to your transport (gRPC streaming) in cmd/server.
 
-type EventSink interface{ Send(api.Event) }
+// type EventSink interface{ Send(api.Event) }
 
 type NoopSink struct{}
 
@@ -41,7 +41,7 @@ func (s PrintSink) Send(ev api.Event) {
 	)
 }
 
-type MultiSink []EventSink
+type MultiSink []api.EventSink
 
 func (m MultiSink) Send(ev api.Event) {
 	for _, s := range m {

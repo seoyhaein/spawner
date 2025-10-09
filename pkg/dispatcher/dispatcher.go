@@ -9,12 +9,14 @@ import (
 	"github.com/seoyhaein/spawner/pkg/frontdoor"
 )
 
+//type EventSink = api.EventSink
+
 type Dispatcher struct {
 	FD  frontdoor.FrontDoor
 	AF  actor.Factory
 	Sem chan struct{} // slot=actor
 
-	defaultSink EventSink // 지정 안 하면 NoopSink 사용
+	defaultSink api.EventSink // 지정 안 하면 NoopSink 사용
 }
 
 // Deprecated: Use NewDispatcher instead.
@@ -42,9 +44,9 @@ func NewDispatcher(fd frontdoor.FrontDoor, af actor.Factory, semSize int, opts .
 
 type Option func(*Dispatcher)
 
-func WithDefaultSink(s EventSink) Option { return func(d *Dispatcher) { d.defaultSink = s } }
+func WithDefaultSink(s api.EventSink) Option { return func(d *Dispatcher) { d.defaultSink = s } }
 
-func (d *Dispatcher) Handle(ctx context.Context, in frontdoor.ResolveInput, sink EventSink) error {
+func (d *Dispatcher) Handle(ctx context.Context, in frontdoor.ResolveInput, sink api.EventSink) error {
 	rr, err := d.FD.Resolve(ctx, in)
 	if err != nil {
 		return err
@@ -77,15 +79,10 @@ func (d *Dispatcher) Handle(ctx context.Context, in frontdoor.ResolveInput, sink
 	}
 
 	// attach sink coming from transport
-	rr.Cmd.Sink = eventSinkAdapter{s}
+	rr.Cmd.Sink = s
 
 	if ok := act.Enqueue(rr.Cmd); !ok {
 		return sErr.ErrMailboxFull
 	}
 	return nil
 }
-
-// thin adapter to avoid import cycle with api.EventSink
-type eventSinkAdapter struct{ s EventSink }
-
-func (a eventSinkAdapter) Send(e api.Event) { a.s.Send(e) }

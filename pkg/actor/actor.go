@@ -11,6 +11,12 @@ import (
 	"github.com/seoyhaein/spawner/pkg/driver"
 )
 
+type Actor interface {
+	Enqueue(api.Command) bool
+	OnTerminate(func())
+	Loop(context.Context)
+}
+
 type SpawnActor struct {
 	key string
 	mb  *Mailbox[api.Command]
@@ -25,12 +31,6 @@ type SpawnActor struct {
 		h      *driver.Handle
 		cancel context.CancelFunc
 	}
-}
-
-type Actor interface {
-	Enqueue(api.Command) bool
-	OnTerminate(func())
-	Loop(context.Context)
 }
 
 func NewSpawnActor(key string, drv driver.Driver, mbSize int) *SpawnActor {
@@ -190,6 +190,7 @@ func (a *SpawnActor) Loop(ctx context.Context) {
 	}
 }
 
+// TODO 생각하기.
 // ---- 이벤트 유틸 ----
 
 // 상태/에러를 구분해 보내기 (Send가 블로킹일 수 있어 타임아웃 가드)
