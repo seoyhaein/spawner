@@ -10,6 +10,9 @@ type Prepared struct{}
 
 type Handle struct{}
 
+// TODO 디버깅 및 추후 확장성을 위해 ID 필드 추가 고려
+// type Handle struct{ ID string }
+
 type Driver interface {
 	Prepare(ctx context.Context, spec api.RunSpec) (Prepared, error)
 	Start(ctx context.Context, p Prepared) (Handle, error)

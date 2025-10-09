@@ -22,7 +22,7 @@ type SpawnActor struct {
 	running bool
 	cur     struct {
 		runID  string
-		h      driver.Handle
+		h      *driver.Handle
 		cancel context.CancelFunc
 	}
 }
@@ -48,6 +48,7 @@ func (a *SpawnActor) isCurrent(runID string) bool {
 }
 
 // TODO 확인해야함.
+// TODO 포인터와 레퍼런스의 구분을 확실히하지 지금은 그냥 오류 처리만 해놓았음.
 
 func (a *SpawnActor) Loop(ctx context.Context) {
 	defer func() {
@@ -118,7 +119,7 @@ func (a *SpawnActor) Loop(ctx context.Context) {
 						if err2 == nil {
 							// 핸들 등록
 							a.mu.Lock()
-							a.cur.h = h
+							a.cur.h = &h
 							a.mu.Unlock()
 
 							_, err = a.drv.Wait(runCtx, h)
@@ -153,7 +154,7 @@ func (a *SpawnActor) Loop(ctx context.Context) {
 				}
 
 				// 우선 드라이버 취소 시도
-				_ = a.drv.Cancel(ctx, h)
+				_ = a.drv.Cancel(ctx, *h)
 				// 추가로 컨텍스트 취소(soft cancel)
 				if cancel != nil {
 					cancel()
@@ -172,7 +173,7 @@ func (a *SpawnActor) Loop(ctx context.Context) {
 					emitErr(cmd.Sink, a.key, curID, errors.New("no active handle or empty signal"))
 					continue
 				}
-				_ = a.drv.Signal(ctx, h, *cmd.Signal)
+				_ = a.drv.Signal(ctx, *h, *cmd.Signal)
 
 			case api.CmdQuery:
 				// 최소 구현: 현재 상태만 발행

@@ -13,6 +13,8 @@ type Dispatcher struct {
 	FD  frontdoor.FrontDoor
 	AF  actor.Factory
 	Sem chan struct{} // slot=actor
+
+	defaultSink EventSink // 지정 안 하면 NoopSink 사용
 }
 
 var ErrSaturated = errors.New("dispatcher saturated: max concurrent actors reached")
@@ -23,6 +25,23 @@ func New(fd frontdoor.FrontDoor, af actor.Factory, maxActors int) *Dispatcher {
 		AF:  af,
 		Sem: make(chan struct{}, maxActors)}
 }
+
+func NewDispatcher(fd frontdoor.FrontDoor, af actor.Factory, semSize int, opts ...Option) *Dispatcher {
+	d := &Dispatcher{
+		FD: fd,
+		AF: af,
+		Sem: make(chan struct{},
+			semSize)}
+
+	for _, o := range opts {
+		o(d)
+	}
+	return d
+}
+
+type Option func(*Dispatcher)
+
+func WithDefaultSink(s EventSink) Option { return func(d *Dispatcher) { d.defaultSink = s } }
 
 func (d *Dispatcher) Handle(ctx context.Context, in frontdoor.ResolveInput, sink EventSink) error {
 	rr, err := d.FD.Resolve(ctx, in)

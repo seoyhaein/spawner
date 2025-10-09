@@ -14,10 +14,6 @@ type Factory interface {
 	GetOrCreate(spawnKey string) (Actor, bool, error)
 }
 
-/*type Factory interface {
-	GetOrCreate(spawnKey string) (*SessionActor, bool, error)
-}*/
-
 type FactoryInMem struct {
 	mu       sync.RWMutex
 	reg      map[string]*SpawnActor
