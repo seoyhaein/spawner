@@ -4,11 +4,12 @@ import (
 	"context"
 	"time"
 
+	"github.com/seoyhaein/spawner/cmd/imp"
 	"github.com/seoyhaein/spawner/pkg/actor"
 	"github.com/seoyhaein/spawner/pkg/api"
 	"github.com/seoyhaein/spawner/pkg/dispatcher"
 	"github.com/seoyhaein/spawner/pkg/driver"
-	"github.com/seoyhaein/spawner/pkg/driver/k8s"
+	"github.com/seoyhaein/spawner/pkg/factory"
 	fdr "github.com/seoyhaein/spawner/pkg/frontdoor"
 	ply "github.com/seoyhaein/spawner/pkg/policy"
 )
@@ -32,14 +33,26 @@ func runRule() fdr.Rule {
 }
 
 func main() {
+	rootCtx := context.Background()
+
 	r := fdr.NewTableFrontDoor(runRule())
-	af := actor.NewFactoryInMem(
-		func(key string) driver.Driver { return k8s.New() }, // 인터페이스 타입으로 반환
+
+	// 드라이버/액터 생성자 둘 다 주입
+	af := factory.NewFactory(
+		rootCtx,
+		func(key string) driver.Driver {
+			return imp.NewK8s("default") // DriverMaker
+		},
+		func(key string, d driver.Driver, mb int) actor.Actor {
+			return imp.NewSpawnActor(key, d, mb) // ActorMaker
+		},
 		128,
 	)
-	d := dispatcher.New(r, af, 2)
 
-	// gRPC 없이 RouteInput 직접 생성
+	// d := dispatcher.New(r, af, 2)
+	d := dispatcher.NewDispatcher(r, af, 2)
+	// d := dispatcher.NewDispatcher(r, af, 2, dispatcher.WithDefaultSink(mySink))
+
 	in := fdr.ResolveInput{
 		Req: &api.RunSpec{
 			RunID:    "run-001",
@@ -59,7 +72,7 @@ func main() {
 		},
 	}
 
-	if err := d.Handle(context.Background(), in, nil); err != nil {
+	if err := d.Handle(rootCtx, in, nil); err != nil {
 		panic(err)
 	}
 	time.Sleep(1 * time.Second)
