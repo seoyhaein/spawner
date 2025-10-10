@@ -13,7 +13,7 @@ import (
 )
 
 // TODO actor 안에 mailbox 는 반드시 들어가야 한다. 이거 구현해주자.
-// TODO 좀더 깔끔하게 만들 수 있음. driver 참고.
+// TODO 좀더 깔끔하게 만들 수 있음. driver 참고. 사실 Loop 만 생각해줘야 하나. 아닐 거 같기도 하고. 초기 설계를 어떻게 잘해갈것인지가 중요.
 
 type SpawnActor struct {
 	key string

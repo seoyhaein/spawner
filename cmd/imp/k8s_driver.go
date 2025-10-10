@@ -9,6 +9,8 @@ import (
 	"github.com/seoyhaein/spawner/pkg/driver"
 )
 
+// driver 와 actor 실제 설계를 잘 해야 함.
+
 type preparedPod struct {
 	driver.BasePrepared /* + spec fields */
 }
