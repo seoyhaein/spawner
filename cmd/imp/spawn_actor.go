@@ -12,6 +12,9 @@ import (
 	"github.com/seoyhaein/spawner/pkg/driver"
 )
 
+// TODO actor 안에 mailbox 는 반드시 들어가야 한다. 이거 구현해주자.
+// TODO 좀더 깔끔하게 만들 수 있음. driver 참고.
+
 type SpawnActor struct {
 	key string
 	mb  *actor.Mailbox[api.Command]
