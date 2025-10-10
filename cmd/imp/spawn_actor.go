@@ -18,7 +18,7 @@ import (
 type SpawnActor struct {
 	key string
 	mb  *actor.Mailbox[api.Command]
-	drv driver.Driver // ✅ 구체타입(DriverK8s) 말고 인터페이스
+	drv driver.Driver // 구체타입(DriverK8s) 말고 인터페이스
 
 	onTerm func()
 
