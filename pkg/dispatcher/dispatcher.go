@@ -44,8 +44,11 @@ func NewDispatcher(fd frontdoor.FrontDoor, af fac.Factory, semSize int, opts ...
 
 type Option func(*Dispatcher)
 
-func WithDefaultSink(s api.EventSink) Option { return func(d *Dispatcher) { d.defaultSink = s } }
+func WithDefaultSink(s api.EventSink) Option {
+	return func(d *Dispatcher) { d.defaultSink = s }
+}
 
+// Handle TODO ctx 생각하기
 func (d *Dispatcher) Handle(ctx context.Context, in frontdoor.ResolveInput, sink api.EventSink) error {
 	rr, err := d.FD.Resolve(ctx, in)
 	if err != nil {
@@ -86,7 +89,7 @@ func (d *Dispatcher) Handle(ctx context.Context, in frontdoor.ResolveInput, sink
 
 	// 커맨드에 싱크 부착 후 큐에 적재
 	rr.Cmd.Sink = s
-	if ok := act.Enqueue(rr.Cmd); !ok {
+	if ok := act.EnqueueCtx(ctx, rr.Cmd); !ok {
 		return sErr.ErrMailboxFull
 	}
 	return nil
