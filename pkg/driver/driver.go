@@ -7,6 +7,8 @@ import (
 	"github.com/seoyhaein/spawner/pkg/api"
 )
 
+// TODO actor 처럼 하는 게 어떤지 생각해보자.
+
 var ErrUnimplemented = errors.New("driver: unimplemented")
 
 // 봉인을 위한 비공개 타입
