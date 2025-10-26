@@ -13,7 +13,29 @@ const (
 	CmdCancel
 	CmdSignal
 	CmdQuery
+	// 추가
+	CmdBind
+	CmdUnbind
 )
+
+type (
+	Bind   struct{ SpawnKey string }
+	Unbind struct{}
+)
+
+type Command struct {
+	Kind CmdKind
+
+	// 추가
+	Bind   *Bind
+	Unbind *Unbind
+
+	Run    *RunSpec
+	Cancel *CancelReq // 추가: 취소 명령 페이로드
+	Signal *Signal
+	Policy ply.AdmitPolicy // 라우터/디스패처가 확정한 정책 스냅샷
+	Sink   EventSink
+}
 
 type RunSpec struct {
 	RunID     string
@@ -34,7 +56,10 @@ type Resources struct {
 	Memory string
 }
 
-type Signal struct{ Name string }
+type Signal struct {
+	RunID string
+	Name  string
+}
 
 // === Events (server → client) ===
 
@@ -84,13 +109,4 @@ type Event struct {
 // Keep it simple here to decouple from transport.
 type EventSink interface {
 	Send(Event)
-}
-
-type Command struct {
-	Kind   CmdKind
-	Run    *RunSpec
-	Cancel *CancelReq // 추가: 취소 명령 페이로드
-	Signal *Signal
-	Policy ply.AdmitPolicy // 라우터/디스패처가 확정한 정책 스냅샷
-	Sink   EventSink
 }

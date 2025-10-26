@@ -44,7 +44,7 @@ func main() {
 			return imp.NewK8s("default") // DriverMaker
 		},
 		func(key string, d driver.Driver, mb int) actor.Actor {
-			return imp.NewSpawnActor(key, d, mb) // ActorMaker
+			return imp.NewK8sActor(key, d, mb) // ActorMaker
 		},
 		128,
 	)
