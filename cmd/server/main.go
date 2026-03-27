@@ -41,7 +41,11 @@ func main() {
 	af := factory.NewFactory(
 		rootCtx,
 		func(key string) driver.Driver {
-			return imp.NewK8s("default") // DriverMaker
+			drv, err := imp.NewK8sFromKubeconfig("default", "")
+			if err != nil {
+				panic(err)
+			}
+			return drv
 		},
 		func(key string, d driver.Driver, mb int) actor.Actor {
 			return imp.NewK8sActor(key, d, mb) // ActorMaker

@@ -1,0 +1,14 @@
+linters-settings:
+  staticcheck:
+    checks: ["all", "-SA9003"]
+
+issues:
+  exclude-rules:
+    # sealed type pattern: markers are used via embedding, linter false positive
+    - path: pkg/driver/driver\.go
+      linters: [unused]
+    # pre-existing unused methods in original code
+    - path: cmd/imp/spawn_actor\.go
+      linters: [unused]
+    - path: pkg/dispatcher/dispatcher\.go
+      linters: [unused]

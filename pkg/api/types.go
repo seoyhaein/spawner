@@ -40,7 +40,9 @@ type Command struct {
 type RunSpec struct {
 	RunID     string
 	ImageRef  string // digest-locked preferred
+	Command   []string
 	Env       map[string]string
+	Labels    map[string]string // K8s labels; kueue.x-k8s.io/queue-name goes here
 	Mounts    []Mount
 	Resources Resources
 }

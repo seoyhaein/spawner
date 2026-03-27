@@ -3,67 +3,301 @@ package imp
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
+
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/seoyhaein/spawner/pkg/api"
 	"github.com/seoyhaein/spawner/pkg/driver"
 )
 
-// driver 와 actor 실제 설계를 잘 해야 함.
-
-type preparedPod struct {
-	driver.BasePrepared /* + spec fields */
+// preparedJob holds the K8s Job object built during Prepare.
+type preparedJob struct {
+	driver.BasePrepared
+	job *batchv1.Job
 }
-type handlePod struct {
+
+// handleJob holds the identity of a submitted Job.
+type handleJob struct {
 	driver.BaseHandle
-	name, ns string
+	name string
+	ns   string
 }
 
+// DriverK8s implements driver.Driver using the Kubernetes batch/v1 Job API.
+// Kueue integration: every Job is created with suspend=true and the
+// kueue.x-k8s.io/queue-name label so Kueue controls admission.
 type DriverK8s struct {
 	driver.BaseDriver
-	ns string
+	ns        string
+	clientset kubernetes.Interface
 }
 
-var _ driver.Driver = (*DriverK8s)(nil) // 컴파일타임 어서션
+var _ driver.Driver = (*DriverK8s)(nil)
 
-func NewK8s(ns string) *DriverK8s { return &DriverK8s{ns: ns} }
+// NewK8s creates a DriverK8s with a pre-built clientset (for testing).
+func NewK8s(ns string, clientset kubernetes.Interface) *DriverK8s {
+	return &DriverK8s{ns: ns, clientset: clientset}
+}
 
+// NewK8sFromKubeconfig creates a DriverK8s using the given kubeconfig path.
+// Pass "" to use the in-cluster config.
+func NewK8sFromKubeconfig(ns, kubeconfigPath string) (*DriverK8s, error) {
+	var cfg *rest.Config
+	var err error
+	if kubeconfigPath == "" {
+		cfg, err = rest.InClusterConfig()
+	} else {
+		cfg, err = clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("k8s config: %w", err)
+	}
+	cs, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("k8s clientset: %w", err)
+	}
+	return NewK8s(ns, cs), nil
+}
+
+// Prepare validates the RunSpec and builds the batchv1.Job object.
+// No K8s API call is made here.
 func (d *DriverK8s) Prepare(ctx context.Context, spec api.RunSpec) (driver.Prepared, error) {
-	// TODO: spec 검증/가공
-	return preparedPod{}, nil
+	if spec.RunID == "" {
+		return nil, fmt.Errorf("RunID is required")
+	}
+	if spec.ImageRef == "" {
+		return nil, fmt.Errorf("ImageRef is required")
+	}
+	job := buildJob(spec, d.ns)
+	return preparedJob{job: job}, nil
 }
+
+// Start submits the prepared Job to Kubernetes.
 func (d *DriverK8s) Start(ctx context.Context, p driver.Prepared) (driver.Handle, error) {
-	pp, ok := p.(preparedPod)
+	pp, ok := p.(preparedJob)
 	if !ok {
-		return nil, fmt.Errorf("prepared origin mismatch")
+		return nil, fmt.Errorf("prepared origin mismatch: expected preparedJob")
 	}
-	_ = pp
-	// TODO: create resource
-	return handlePod{name: fmt.Sprintf("run-%d", time.Now().UnixNano()), ns: d.ns}, nil
+	created, err := d.clientset.BatchV1().Jobs(d.ns).Create(ctx, pp.job, metav1.CreateOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("create job %s: %w", pp.job.Name, err)
+	}
+	return handleJob{name: created.Name, ns: created.Namespace}, nil
 }
+
+// Wait polls the Job until it succeeds, fails, or ctx is cancelled.
+// Poll interval: 2s. Suitable for PoC; replace with Watch for production.
 func (d *DriverK8s) Wait(ctx context.Context, h driver.Handle) (api.Event, error) {
-	hd, ok := h.(handlePod)
+	hd, ok := h.(handleJob)
 	if !ok {
-		return api.Event{}, fmt.Errorf("handle origin mismatch")
+		return api.Event{}, fmt.Errorf("handle origin mismatch: expected handleJob")
 	}
-	_ = hd
-	// TODO: watch/wait
-	return api.Event{When: time.Now(), State: api.StateSucceeded}, nil
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return api.Event{}, ctx.Err()
+		case <-ticker.C:
+			job, err := d.clientset.BatchV1().Jobs(hd.ns).Get(ctx, hd.name, metav1.GetOptions{})
+			if err != nil {
+				return api.Event{}, fmt.Errorf("get job %s: %w", hd.name, err)
+			}
+			if jobSucceeded(job) {
+				return api.Event{
+					RunID: hd.name,
+					When:  time.Now(),
+					State: api.StateSucceeded,
+				}, nil
+			}
+			if jobFailed(job) {
+				return api.Event{
+					RunID:   hd.name,
+					When:    time.Now(),
+					State:   api.StateFailed,
+					Message: jobFailureMessage(job),
+				}, nil
+			}
+		}
+	}
 }
-func (d *DriverK8s) Signal(ctx context.Context, h driver.Handle, sig api.Signal) error {
-	hd, ok := h.(handlePod)
-	if !ok {
+
+// Signal is not implemented for K8s Jobs in this PoC.
+func (d *DriverK8s) Signal(_ context.Context, h driver.Handle, _ api.Signal) error {
+	if _, ok := h.(handleJob); !ok {
 		return fmt.Errorf("handle origin mismatch")
 	}
-	_ = hd
-	_ = sig
 	return nil
 }
+
+// Cancel deletes the Job and its pods (background propagation).
 func (d *DriverK8s) Cancel(ctx context.Context, h driver.Handle) error {
-	hd, ok := h.(handlePod)
+	hd, ok := h.(handleJob)
 	if !ok {
-		return fmt.Errorf("handle origin mismatch")
+		return fmt.Errorf("handle origin mismatch: expected handleJob")
 	}
-	_ = hd
+	propagation := metav1.DeletePropagationBackground
+	err := d.clientset.BatchV1().Jobs(hd.ns).Delete(ctx, hd.name, metav1.DeleteOptions{
+		PropagationPolicy: &propagation,
+	})
+	if err != nil {
+		return fmt.Errorf("delete job %s: %w", hd.name, err)
+	}
 	return nil
+}
+
+// buildJob constructs a batchv1.Job from a RunSpec.
+// Key PoC behaviours:
+//   - suspend: true  — Kueue manages admission
+//   - kueue.x-k8s.io/queue-name label — taken from spec.Labels if present
+//   - PVC volumes — each Mount.Source is treated as a PVC claim name
+func buildJob(spec api.RunSpec, ns string) *batchv1.Job {
+	jobName := sanitizeName(spec.RunID)
+
+	labels := make(map[string]string, len(spec.Labels)+1)
+	labels["pipeline-lite/run-id"] = spec.RunID
+	for k, v := range spec.Labels {
+		labels[k] = v
+	}
+
+	container := corev1.Container{
+		Name:            "main",
+		Image:           spec.ImageRef,
+		Command:         spec.Command,
+		Env:             buildEnvVars(spec.Env),
+		Resources:       buildResources(spec.Resources),
+		ImagePullPolicy: corev1.PullIfNotPresent,
+	}
+
+	volumes, volumeMounts := buildVolumes(spec.Mounts)
+	container.VolumeMounts = volumeMounts
+
+	suspend := true
+	backoffLimit := int32(0) // PoC: no retry; fail immediately on pod failure
+	return &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      jobName,
+			Namespace: ns,
+			Labels:    labels,
+		},
+		Spec: batchv1.JobSpec{
+			Suspend:      &suspend,
+			BackoffLimit: &backoffLimit,
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: labels,
+				},
+				Spec: corev1.PodSpec{
+					RestartPolicy: corev1.RestartPolicyNever,
+					Containers:    []corev1.Container{container},
+					Volumes:       volumes,
+				},
+			},
+		},
+	}
+}
+
+func buildEnvVars(env map[string]string) []corev1.EnvVar {
+	vars := make([]corev1.EnvVar, 0, len(env))
+	for k, v := range env {
+		vars = append(vars, corev1.EnvVar{Name: k, Value: v})
+	}
+	return vars
+}
+
+func buildResources(r api.Resources) corev1.ResourceRequirements {
+	req := corev1.ResourceList{}
+	lim := corev1.ResourceList{}
+	if r.CPU != "" {
+		q := resource.MustParse(r.CPU)
+		req[corev1.ResourceCPU] = q
+		lim[corev1.ResourceCPU] = q
+	}
+	if r.Memory != "" {
+		q := resource.MustParse(r.Memory)
+		req[corev1.ResourceMemory] = q
+		lim[corev1.ResourceMemory] = q
+	}
+	return corev1.ResourceRequirements{Requests: req, Limits: lim}
+}
+
+// buildVolumes converts RunSpec.Mounts to K8s Volumes + VolumeMounts.
+// Each Mount.Source is treated as a PVC claim name.
+func buildVolumes(mounts []api.Mount) ([]corev1.Volume, []corev1.VolumeMount) {
+	volumes := make([]corev1.Volume, 0, len(mounts))
+	volumeMounts := make([]corev1.VolumeMount, 0, len(mounts))
+	for i, m := range mounts {
+		volName := fmt.Sprintf("vol-%d", i)
+		volumes = append(volumes, corev1.Volume{
+			Name: volName,
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: m.Source,
+					ReadOnly:  m.ReadOnly,
+				},
+			},
+		})
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      volName,
+			MountPath: m.Target,
+			ReadOnly:  m.ReadOnly,
+		})
+	}
+	return volumes, volumeMounts
+}
+
+// sanitizeName converts a RunID into a valid K8s resource name.
+// K8s names: lowercase alphanumeric and '-', max 63 chars.
+func sanitizeName(id string) string {
+	s := strings.ToLower(id)
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('-')
+		}
+	}
+	name := strings.Trim(b.String(), "-")
+	if len(name) > 63 {
+		name = name[:63]
+	}
+	return name
+}
+
+func jobSucceeded(job *batchv1.Job) bool {
+	for _, c := range job.Status.Conditions {
+		if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
+func jobFailed(job *batchv1.Job) bool {
+	for _, c := range job.Status.Conditions {
+		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
+func jobFailureMessage(job *batchv1.Job) string {
+	for _, c := range job.Status.Conditions {
+		if c.Type == batchv1.JobFailed {
+			return c.Message
+		}
+	}
+	return "job failed"
 }
