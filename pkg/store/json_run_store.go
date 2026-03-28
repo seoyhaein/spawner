@@ -5,16 +5,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
 
 // JsonRunStore is a durable-lite RunStore backed by a single JSON file.
 //
-// NOT production-grade: no WAL, no atomic rename guarantee on all OSes,
-// no concurrent multi-process access.
-// Purpose: demonstrate that runs survive process restart.
+// Writes are atomic via tmp-file + rename: a crash during write never leaves
+// a partial/corrupt file. Either the old version remains or the new one is complete.
 //
+// LIMITATION: atomic only on POSIX same-filesystem renames.
 // ASSUMPTION: production replaces this with PostgreSQL or equivalent.
 type JsonRunStore struct {
 	mu      sync.Mutex
@@ -46,12 +47,32 @@ func (s *JsonRunStore) load() error {
 	return json.Unmarshal(data, &s.records)
 }
 
+// persist writes records atomically via tmp-file + rename (POSIX atomic).
 func (s *JsonRunStore) persist() error {
 	data, err := json.Marshal(s.records)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path, data, 0o600)
+	dir := filepath.Dir(s.path)
+	tmp, err := os.CreateTemp(dir, ".runstore-*.tmp")
+	if err != nil {
+		return fmt.Errorf("persist tmp create: %w", err)
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("persist tmp write: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("persist tmp close: %w", err)
+	}
+	if err := os.Rename(tmpPath, s.path); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("persist rename: %w", err)
+	}
+	return nil
 }
 
 func (s *JsonRunStore) Enqueue(_ context.Context, rec RunRecord) error {
