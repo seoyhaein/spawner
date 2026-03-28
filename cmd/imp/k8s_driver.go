@@ -11,8 +11,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/seoyhaein/spawner/pkg/api"
 	"github.com/seoyhaein/spawner/pkg/driver"
@@ -48,15 +46,10 @@ func NewK8s(ns string, clientset kubernetes.Interface) *DriverK8s {
 }
 
 // NewK8sFromKubeconfig creates a DriverK8s using the given kubeconfig path.
-// Pass "" to use the in-cluster config.
+// Pass "" to try in-cluster config first, then fall back to the default
+// kubeconfig (~/.kube/config or KUBECONFIG env var).
 func NewK8sFromKubeconfig(ns, kubeconfigPath string) (*DriverK8s, error) {
-	var cfg *rest.Config
-	var err error
-	if kubeconfigPath == "" {
-		cfg, err = rest.InClusterConfig()
-	} else {
-		cfg, err = clientcmd.BuildConfigFromFlags("", kubeconfigPath)
-	}
+	cfg, err := buildConfig(kubeconfigPath)
 	if err != nil {
 		return nil, fmt.Errorf("k8s config: %w", err)
 	}

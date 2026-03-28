@@ -1,0 +1,91 @@
+// Package store provides RunStore: a boundary between the service front-end
+// and the Actor/Driver execution layer.
+//
+// Queued runs live here until admitted to a DagSession or Actor.
+// This enforces the invariant that a burst of user submissions does NOT
+// become a burst of K8s Job creations — the Run queue absorbs the spike.
+//
+// ASSUMPTION: production replaces InMemoryRunStore/JsonRunStore with
+// PostgreSQL/Redis. The interface is identical.
+package store
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+)
+
+// RunState is the lifecycle state of a submitted DAG run.
+type RunState string
+
+const (
+	// StateQueued: received from user, waiting for admission.
+	StateQueued RunState = "queued"
+	// StateHeld: explicitly paused (K8s unavailable, rate-limit, manual hold).
+	StateHeld RunState = "held"
+	// StateResumed: hold lifted, waiting for re-admission.
+	StateResumed RunState = "resumed"
+	// StateAdmittedToDag: handed to a DagSession/Actor; execution is driving.
+	StateAdmittedToDag RunState = "admitted-to-dag"
+	// StateRunning: at least one node attempt is active in Kueue/K8s.
+	StateRunning RunState = "running"
+	// StateFinished: all nodes completed (terminal).
+	StateFinished RunState = "finished"
+	// StateCanceled: run was canceled (terminal).
+	StateCanceled RunState = "canceled"
+)
+
+// validTransitions defines allowed state machine edges.
+// Reverse transitions and terminal→any are rejected.
+var validTransitions = map[RunState][]RunState{
+	StateQueued:        {StateHeld, StateAdmittedToDag, StateCanceled},
+	StateHeld:          {StateResumed, StateCanceled},
+	StateResumed:       {StateAdmittedToDag, StateCanceled},
+	StateAdmittedToDag: {StateRunning, StateCanceled},
+	StateRunning:       {StateFinished, StateCanceled},
+	StateFinished:      {}, // terminal
+	StateCanceled:      {}, // terminal
+}
+
+var (
+	ErrInvalidTransition = errors.New("invalid state transition")
+	ErrNotFound          = errors.New("run not found")
+	ErrAlreadyExists     = errors.New("run already exists")
+)
+
+// RunRecord is the persisted representation of a submitted DAG run.
+type RunRecord struct {
+	RunID     string
+	State     RunState
+	Payload   []byte // serialized RunSpec; opaque to RunStore
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// RunStore is the contract for the front-end run store.
+//
+// ASSUMPTION: production will use PostgreSQL/Redis. The interface is identical.
+type RunStore interface {
+	Enqueue(ctx context.Context, rec RunRecord) error
+	Get(ctx context.Context, runID string) (RunRecord, bool, error)
+	UpdateState(ctx context.Context, runID string, from, to RunState) error
+	ListByState(ctx context.Context, state RunState) ([]RunRecord, error)
+	Delete(ctx context.Context, runID string) error
+}
+
+// ValidateTransition returns ErrInvalidTransition if the from→to edge is
+// not in the state machine.
+func ValidateTransition(from, to RunState) error {
+	for _, allowed := range validTransitions[from] {
+		if allowed == to {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: %s → %s", ErrInvalidTransition, from, to)
+}
+
+// IsTerminal reports whether s is a terminal state (no further transitions).
+func IsTerminal(s RunState) bool {
+	return s == StateFinished || s == StateCanceled
+}
