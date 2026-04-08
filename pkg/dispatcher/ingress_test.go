@@ -35,10 +35,6 @@ func (m *mockActor) Loop(_ context.Context)                           {}
 type mockFactory struct{ act *mockActor }
 
 func (m *mockFactory) Get(_ string) (actor.Actor, bool) { return nil, false }
-func (m *mockFactory) Create(_ string) (actor.Actor, bool, error) {
-	return m.act, true, nil
-}
-func (m *mockFactory) Delete(_ string, _ actor.Actor) bool { return true }
 func (m *mockFactory) Bind(_ string) (actor.Actor, bool, error) {
 	return m.act, true, nil
 }

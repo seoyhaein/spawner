@@ -1,7 +1,6 @@
 package factory
 
 import (
-	"context"
 	"sync"
 
 	"github.com/seoyhaein/spawner/pkg/actor"
@@ -16,13 +15,6 @@ type Factory interface {
 	// Get 이미 등록된 액터를 조회 (루프 상태와 무관)
 	// 현재 "바운드된" 액터(있다면)를 조회. (재활용 모드에선 regBound를 우선 확인)
 	Get(spawnKey string) (actor.Actor, bool)
-
-	// Create 아직 없다면 생성·등록. 여기서는 절대 Loop를 시작하지 않음. -> 시작하면 좀비 될 수 있음.
-	// 경합 시 이미 누가 등록했다면 (act, false, nil) 반환.
-	Create(spawnKey string) (act actor.Actor, created bool, err error)
-
-	// Delete 롤백/GC용: 동일 인스턴스일 때만 안전 삭제
-	Delete(spawnKey string, act actor.Actor) bool
 
 	// (a) 이미 해당 spawnKey로 바운드된 액터가 있으면 그걸 반환(created=false),
 	// (b) 아니면 idle 풀에서 하나 꺼내거나 새로 생성해 반환(created=true).
@@ -39,11 +31,7 @@ type DriverMaker func(spawnKey string) driver.Driver
 type ActorMaker func(spawnKey string, drv driver.Driver, mbSize int) actor.Actor
 
 type FactoryImp struct {
-	ctx context.Context
 	mu  sync.RWMutex
-
-	// actor 저장소
-	reg map[string]actor.Actor
 
 	// 재활용 모드: 현재 바운드된 액터와 idle 풀
 	regBound map[string]actor.Actor // spawnKey -> actor (바인딩 중)
@@ -54,14 +42,9 @@ type FactoryImp struct {
 	mbSize    int
 }
 
-func NewFactory(ctx context.Context, mkDrv DriverMaker, mkActor ActorMaker, mbSize int) *FactoryImp {
+func NewFactory(mkDrv DriverMaker, mkActor ActorMaker, mbSize int) *FactoryImp {
 	return &FactoryImp{
-		ctx: ctx,
-		// 추가
-		reg:      make(map[string]actor.Actor),
 		regBound: make(map[string]actor.Actor),
-
-		idlePool:  nil,
 		makeDrv:   mkDrv,
 		makeActor: mkActor,
 		mbSize:    mbSize,
@@ -75,46 +58,8 @@ func (f *FactoryImp) Get(spawnKey string) (actor.Actor, bool) {
 		f.mu.RUnlock()
 		return a, true
 	}
-	// 그 외엔 레거시 저장소를 조회(기존 코드 호환)
-	a, ok := f.reg[spawnKey]
 	f.mu.RUnlock()
-	return a, ok
-}
-
-func (f *FactoryImp) Create(spawnKey string) (actor.Actor, bool, error) {
-	// fast path
-	if a, ok := f.Get(spawnKey); ok {
-		return a, false, nil
-	}
-
-	// 등록 경합 보호
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	// 다시 확인 (경합)
-	if a, ok := f.regBound[spawnKey]; ok {
-		return a, false, nil
-	}
-	if a, ok := f.reg[spawnKey]; ok {
-		return a, false, nil
-	}
-
-	drv := f.makeDrv(spawnKey)
-	act := f.makeActor(spawnKey, drv, f.mbSize)
-	// 레거시 경로에선 reg에 등록
-	f.reg[spawnKey] = act
-	// 여기서는 절대 Loop를 시작하지 않는다.
-	return act, true, nil
-}
-
-func (f *FactoryImp) Delete(spawnKey string, act actor.Actor) bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if cur, ok := f.reg[spawnKey]; ok && cur == act {
-		delete(f.reg, spawnKey)
-		return true
-	}
-	return false
+	return nil, false
 }
 
 // ===== 재활용 경로 =====

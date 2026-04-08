@@ -78,7 +78,6 @@ func main() {
 	r := fdr.NewTableFrontDoor(runRule())
 
 	af := factory.NewFactory(
-		rootCtx,
 		drvFn,
 		func(key string, d driver.Driver, mb int) actor.Actor {
 			return imp.NewK8sActor(key, d, mb)
@@ -128,6 +127,4 @@ func main() {
 	} else {
 		log.Printf("[server] run-001 → admitted-to-dag")
 	}
-
-	time.Sleep(1 * time.Second)
 }
