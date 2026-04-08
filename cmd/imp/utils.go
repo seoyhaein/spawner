@@ -6,7 +6,6 @@ import (
 	"github.com/seoyhaein/spawner/pkg/api"
 )
 
-// ---- 이벤트 유틸 (그대로) ----
 func emitState(s api.EventSink, spawnKey, runID string, st api.State, msg string) {
 	ev := api.Event{SpawnKey: spawnKey, RunID: runID, When: time.Now(), State: st, Message: msg}
 	sendWithTimeout(s, ev, 3*time.Second)

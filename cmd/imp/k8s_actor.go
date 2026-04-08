@@ -11,10 +11,10 @@ import (
 	"github.com/seoyhaein/spawner/pkg/driver"
 )
 
-// SpawnActor는 동일 actor 안에서 여러 runID를 병렬 실행할 수 있도록 설계되었습니다.
-// - active: runID별 실행 상태(handle, cancel)를 관리
-// - execSem: 내부 동시 실행 개수 제한(버퍼 크기 == 병렬도)
-// - execWG : 실행 고루틴 추적(종료 시 누수 방지)
+// K8sActor can run multiple runIDs concurrently within the same actor.
+// - active tracks per-run handle/cancel state
+// - execSem bounds internal parallelism
+// - execWG waits for run goroutines during shutdown
 
 type K8sActor struct {
 	key string
@@ -53,15 +53,10 @@ func NewK8sActor(key string, drv driver.Driver, mbSize int) *K8sActor {
 
 func (a *K8sActor) OnTerminate(fn func()) { a.onTerm = fn }
 
-// 정책 분리: 드롭(논블로킹) vs 백프레셔(컨텍스트 대기)
-
 func (a *K8sActor) EnqueueTry(c api.Command) bool                      { return a.mb.TryEnqueue(c) }
 func (a *K8sActor) EnqueueCtx(ctx context.Context, c api.Command) bool { return a.mb.Enqueue(ctx, c) }
 
-// CloseInbox 외부에서 명시적으로 새 전송 금지시키고 싶을 때
 func (a *K8sActor) CloseInbox() { a.mb.Close() }
-
-// TODO 테스트 해야함. 정책 바꾸고 싶으면 len(a.active) > 0일 때 전부 cancel하고 언바인드 허용으로도 가능:
 
 func (a *K8sActor) Loop(ctx context.Context) {
 	defer func() {
