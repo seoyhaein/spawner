@@ -1,0 +1,185 @@
+package imp
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
+
+	"github.com/seoyhaein/spawner/pkg/api"
+	"github.com/seoyhaein/spawner/pkg/driver"
+)
+
+type testPrepared struct{ driver.BasePrepared }
+type testHandle struct{ driver.BaseHandle }
+
+func TestDriverK8sPrepare_ValidatesRequiredFields(t *testing.T) {
+	d := NewK8s("default", k8sfake.NewSimpleClientset())
+
+	if _, err := d.Prepare(context.Background(), api.RunSpec{}); err == nil {
+		t.Fatal("expected missing RunID to fail")
+	}
+
+	if _, err := d.Prepare(context.Background(), api.RunSpec{RunID: "run-1"}); err == nil {
+		t.Fatal("expected missing ImageRef to fail")
+	}
+}
+
+func TestBuildJob_MapsSpecFields(t *testing.T) {
+	spec := api.RunSpec{
+		RunID:    "My.Run_01",
+		ImageRef: "busybox:1.36",
+		Command:  []string{"sh", "-c", "echo hi"},
+		Env: map[string]string{
+			"FOO": "bar",
+		},
+		Labels: map[string]string{
+			"kueue.x-k8s.io/queue-name": "poc-standard-lq",
+		},
+		Mounts: []api.Mount{
+			{Source: "pvc-a", Target: "/data", ReadOnly: false},
+		},
+		Resources: api.Resources{CPU: "100m", Memory: "64Mi"},
+	}
+
+	job := buildJob(spec, "default")
+
+	if job.Name != "my-run-01" {
+		t.Fatalf("unexpected sanitized job name: %q", job.Name)
+	}
+	if job.Namespace != "default" {
+		t.Fatalf("unexpected namespace: %q", job.Namespace)
+	}
+	if job.Labels["pipeline-lite/run-id"] != spec.RunID {
+		t.Fatalf("expected run-id label %q, got %q", spec.RunID, job.Labels["pipeline-lite/run-id"])
+	}
+	if q := job.Labels["kueue.x-k8s.io/queue-name"]; q != "poc-standard-lq" {
+		t.Fatalf("unexpected queue label: %q", q)
+	}
+	if job.Spec.Suspend == nil || !*job.Spec.Suspend {
+		t.Fatal("expected Job to be created suspended for Kueue")
+	}
+	if job.Spec.BackoffLimit == nil || *job.Spec.BackoffLimit != 0 {
+		t.Fatal("expected backoffLimit=0")
+	}
+	if len(job.Spec.Template.Spec.Containers) != 1 {
+		t.Fatalf("expected 1 container, got %d", len(job.Spec.Template.Spec.Containers))
+	}
+	c := job.Spec.Template.Spec.Containers[0]
+	if c.Image != spec.ImageRef {
+		t.Fatalf("unexpected image: %q", c.Image)
+	}
+	if got := c.Env[0].Value; got != "bar" {
+		t.Fatalf("unexpected env value: %q", got)
+	}
+	cpuQty := c.Resources.Requests[corev1.ResourceCPU]
+	if got := cpuQty.String(); got != "100m" {
+		t.Fatalf("unexpected cpu request: %q", got)
+	}
+	memQty := c.Resources.Requests[corev1.ResourceMemory]
+	if got := memQty.String(); got != "64Mi" {
+		t.Fatalf("unexpected memory request: %q", got)
+	}
+	if len(job.Spec.Template.Spec.Volumes) != 1 {
+		t.Fatalf("expected 1 volume, got %d", len(job.Spec.Template.Spec.Volumes))
+	}
+	if got := job.Spec.Template.Spec.Volumes[0].PersistentVolumeClaim.ClaimName; got != "pvc-a" {
+		t.Fatalf("unexpected pvc claim: %q", got)
+	}
+	if len(c.VolumeMounts) != 1 || c.VolumeMounts[0].MountPath != "/data" {
+		t.Fatal("expected volume mount at /data")
+	}
+}
+
+func TestDriverK8sStartAndCancel_WithFakeClient(t *testing.T) {
+	cs := k8sfake.NewSimpleClientset()
+	d := NewK8s("default", cs)
+
+	p, err := d.Prepare(context.Background(), api.RunSpec{
+		RunID:    "run-1",
+		ImageRef: "busybox:1.36",
+		Command:  []string{"sh", "-c", "echo hi"},
+	})
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+
+	h, err := d.Start(context.Background(), p)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	if _, err := cs.BatchV1().Jobs("default").Get(context.Background(), "run-1", metav1.GetOptions{}); err != nil {
+		t.Fatalf("expected created job: %v", err)
+	}
+
+	if err := d.Cancel(context.Background(), h); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+
+	if _, err := cs.BatchV1().Jobs("default").Get(context.Background(), "run-1", metav1.GetOptions{}); err == nil {
+		t.Fatal("expected job to be deleted after Cancel")
+	}
+}
+
+func TestDriverK8sWait_ContextCancelled(t *testing.T) {
+	d := NewK8s("default", k8sfake.NewSimpleClientset())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := d.Wait(ctx, handleJob{name: "run-1", ns: "default"})
+	if err == nil {
+		t.Fatal("expected Wait to return context cancellation")
+	}
+}
+
+func TestDriverK8sWait_ReturnsSucceededEvent(t *testing.T) {
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: "run-1", Namespace: "default"},
+		Status: batchv1.JobStatus{
+			Conditions: []batchv1.JobCondition{
+				{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
+			},
+		},
+	}
+	d := NewK8s("default", k8sfake.NewSimpleClientset(job))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	ev, err := d.Wait(ctx, handleJob{name: "run-1", ns: "default"})
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if ev.State != api.StateSucceeded {
+		t.Fatalf("expected succeeded event, got %s", ev.State)
+	}
+	if ev.RunID != "run-1" {
+		t.Fatalf("unexpected RunID: %q", ev.RunID)
+	}
+}
+
+func TestDriverK8sHandleMismatchErrors(t *testing.T) {
+	d := NewK8s("default", k8sfake.NewSimpleClientset())
+
+	if _, err := d.Start(context.Background(), testPrepared{}); err == nil {
+		t.Fatal("expected Start to reject foreign prepared type")
+	}
+	if _, err := d.Wait(context.Background(), testHandle{}); err == nil {
+		t.Fatal("expected Wait to reject foreign handle type")
+	}
+	if err := d.Signal(context.Background(), testHandle{}, api.Signal{}); err == nil {
+		t.Fatal("expected Signal to reject foreign handle type")
+	}
+	if err := d.Cancel(context.Background(), testHandle{}); err == nil {
+		t.Fatal("expected Cancel to reject foreign handle type")
+	}
+}
+
+var _ driver.Prepared = preparedJob{}
+var _ driver.Handle = handleJob{}

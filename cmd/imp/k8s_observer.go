@@ -127,7 +127,10 @@ func (o *K8sObserver) ObserveWorkload(ctx context.Context, jobName string) (Work
 
 	for _, item := range list.Items {
 		// Match by ownerReference: Job with same name
-		ownerRefs, _, _ := unstructuredOwnerRefs(item.Object)
+		ownerRefs, ok := unstructuredOwnerRefs(item.Object)
+		if !ok {
+			continue
+		}
 		for _, ref := range ownerRefs {
 			if ref["kind"] == "Job" && ref["name"] == jobName {
 				return parseWorkloadObservation(item.GetName(), item.Object), nil
@@ -162,18 +165,18 @@ func (o *K8sObserver) ObservePod(ctx context.Context, jobName string) (PodSchedu
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-func unstructuredOwnerRefs(obj map[string]interface{}) ([]map[string]interface{}, bool, error) {
+func unstructuredOwnerRefs(obj map[string]interface{}) ([]map[string]interface{}, bool) {
 	meta, ok := obj["metadata"].(map[string]interface{})
 	if !ok {
-		return nil, false, nil
+		return nil, false
 	}
 	raw, ok := meta["ownerReferences"]
 	if !ok {
-		return nil, false, nil
+		return nil, false
 	}
 	refs, ok := raw.([]interface{})
 	if !ok {
-		return nil, false, nil
+		return nil, false
 	}
 	out := make([]map[string]interface{}, 0, len(refs))
 	for _, r := range refs {
@@ -181,7 +184,7 @@ func unstructuredOwnerRefs(obj map[string]interface{}) ([]map[string]interface{}
 			out = append(out, m)
 		}
 	}
-	return out, true, nil
+	return out, true
 }
 
 func parseWorkloadObservation(name string, obj map[string]interface{}) WorkloadObservation {

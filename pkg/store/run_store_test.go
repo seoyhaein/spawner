@@ -105,7 +105,9 @@ func TestJsonStore_RecoveryAfterRestart(t *testing.T) {
 	ctx := context.Background()
 	f, _ := os.CreateTemp(t.TempDir(), "runstore-*.json")
 	path := f.Name()
-	f.Close()
+	if err := f.Close(); err != nil {
+		t.Fatalf("close temp file: %v", err)
+	}
 
 	s1, _ := store.NewJsonRunStore(path)
 	_ = s1.Enqueue(ctx, store.RunRecord{RunID: "run-A", State: store.StateQueued})

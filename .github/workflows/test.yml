@@ -1,0 +1,43 @@
+name: Tests
+
+on:
+  push:
+    paths-ignore:
+      - "**/*.md"
+      - "LICENSE*"
+      - ".github/**/*.md"
+  pull_request:
+    paths-ignore:
+      - "**/*.md"
+      - "LICENSE*"
+      - ".github/**/*.md"
+
+jobs:
+  test:
+    name: Run on Ubuntu
+    runs-on: ubuntu-latest
+    env:
+      TMPDIR: /tmp
+      GOTMPDIR: /tmp
+      GOCACHE: /tmp/go-build
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Verify module state
+        run: |
+          go mod tidy
+          git diff --exit-code
+
+      - name: Run regression tests
+        run: go test ./...
+
+      - name: Measure coverage
+        run: |
+          go test -coverprofile=/tmp/spawner.cover ./...
+          go tool cover -func=/tmp/spawner.cover | tail -n 1

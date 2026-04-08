@@ -31,7 +31,7 @@ type DriverMaker func(spawnKey string) driver.Driver
 type ActorMaker func(spawnKey string, drv driver.Driver, mbSize int) actor.Actor
 
 type FactoryImp struct {
-	mu  sync.RWMutex
+	mu sync.RWMutex
 
 	// 재활용 모드: 현재 바운드된 액터와 idle 풀
 	regBound map[string]actor.Actor // spawnKey -> actor (바인딩 중)
@@ -44,7 +44,7 @@ type FactoryImp struct {
 
 func NewFactory(mkDrv DriverMaker, mkActor ActorMaker, mbSize int) *FactoryImp {
 	return &FactoryImp{
-		regBound: make(map[string]actor.Actor),
+		regBound:  make(map[string]actor.Actor),
 		makeDrv:   mkDrv,
 		makeActor: mkActor,
 		mbSize:    mbSize,

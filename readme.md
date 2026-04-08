@@ -46,9 +46,17 @@ Detailed bilingual review documents:
 
 Current validation baseline:
 
+- `TMPDIR=/tmp GOTMPDIR=/tmp GOCACHE=/tmp/go-build GOLANGCI_LINT_CACHE=/tmp/golangci-lint ./bin/golangci-lint run`
 - `go test ./...`
 - `TMPDIR=/tmp GOTMPDIR=/tmp GOCACHE=/tmp/go-build go test -coverprofile=/tmp/spawner.cover ./...`
-- `go tool cover -func=/tmp/spawner.cover`
+- `TMPDIR=/tmp GOTMPDIR=/tmp GOCACHE=/tmp/go-build go tool cover -func=/tmp/spawner.cover`
+
+Regression guardrail:
+
+- local push flow should be `lint -> test -> coverage`
+- if regression tests fail, the change is treated as failed and must be fixed before push
+- GitHub Actions runs the same checks on every push and pull request
+- the repository-local linter binary is expected at `./bin/golangci-lint`
 
 The repository now includes direct tests for:
 
@@ -60,8 +68,8 @@ The repository now includes direct tests for:
 
 Coverage snapshot:
 
-- Overall statement coverage: `31.5%`
-- `cmd/imp`: `4.7%`
+- Overall statement coverage: `54.8%`
+- `cmd/imp`: `53.8%`
 - `pkg/dispatcher`: `73.3%`
 - `pkg/store`: `67.0%`
 - `pkg/factory`: `96.8%`
