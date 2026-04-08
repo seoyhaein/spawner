@@ -45,6 +45,25 @@ func TestValidateTransition_Invalid(t *testing.T) {
 	}
 }
 
+func TestIsTerminal(t *testing.T) {
+	cases := []struct {
+		state store.RunState
+		want  bool
+	}{
+		{state: store.StateQueued, want: false},
+		{state: store.StateHeld, want: false},
+		{state: store.StateRunning, want: false},
+		{state: store.StateFinished, want: true},
+		{state: store.StateCanceled, want: true},
+	}
+
+	for _, tc := range cases {
+		if got := store.IsTerminal(tc.state); got != tc.want {
+			t.Fatalf("IsTerminal(%q) = %v, want %v", tc.state, got, tc.want)
+		}
+	}
+}
+
 // ── InMemoryRunStore ──────────────────────────────────────────────────────────
 
 // TestMemoryStore_DoesNotSurviveReset proves that a new InMemoryRunStore
@@ -95,6 +114,39 @@ func TestMemoryStore_StateTransition(t *testing.T) {
 		t.Fatal("invalid backward transition was accepted")
 	}
 	t.Logf("PASS: invalid backward transition rejected: %v", err)
+}
+
+func TestMemoryStore_ListByStateAndDelete(t *testing.T) {
+	ctx := context.Background()
+	s := store.NewInMemoryRunStore()
+
+	for _, rec := range []store.RunRecord{
+		{RunID: "queued-1", State: store.StateQueued},
+		{RunID: "queued-2", State: store.StateQueued},
+		{RunID: "held-1", State: store.StateHeld},
+	} {
+		if err := s.Enqueue(ctx, rec); err != nil {
+			t.Fatalf("Enqueue(%s): %v", rec.RunID, err)
+		}
+	}
+
+	queued, err := s.ListByState(ctx, store.StateQueued)
+	if err != nil {
+		t.Fatalf("ListByState: %v", err)
+	}
+	if len(queued) != 2 {
+		t.Fatalf("expected 2 queued runs, got %d", len(queued))
+	}
+
+	if err := s.Delete(ctx, "queued-1"); err != nil {
+		t.Fatalf("Delete existing run: %v", err)
+	}
+	if err := s.Delete(ctx, "queued-1"); err != store.ErrNotFound {
+		t.Fatalf("expected ErrNotFound on repeated delete, got %v", err)
+	}
+	if _, ok, _ := s.Get(ctx, "queued-1"); ok {
+		t.Fatal("deleted run still present in store")
+	}
 }
 
 // ── JsonRunStore ──────────────────────────────────────────────────────────────

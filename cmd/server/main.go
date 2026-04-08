@@ -19,6 +19,8 @@ import (
 	"github.com/seoyhaein/spawner/pkg/store"
 )
 
+const defaultRunStorePath = "/tmp/spawner-runstore.json"
+
 func runRule() fdr.Rule {
 	return fdr.Rule{
 		Match: func(in fdr.ResolveInput) bool { return in.Meta.RPC == "RunE" },
@@ -37,16 +39,51 @@ func runRule() fdr.Rule {
 	}
 }
 
+func runStorePath(getenv func(string) string) string {
+	if path := getenv("RUN_STORE_PATH"); path != "" {
+		return path
+	}
+	return defaultRunStorePath
+}
+
+func sampleInput() fdr.ResolveInput {
+	return fdr.ResolveInput{
+		Req: &api.RunSpec{
+			RunID:    "run-001",
+			ImageRef: "ghcr.io/acme/tool@sha256:deadbeef...",
+			Env:      map[string]string{"SAMPLE_ID": "HG001"},
+			Mounts: []api.Mount{
+				{Source: "/data/HG001", Target: "/in", ReadOnly: true},
+				{Source: "workvol", Target: "/work", ReadOnly: false},
+			},
+			Resources: api.Resources{CPU: "2", Memory: "4Gi"},
+		},
+		Meta: fdr.MetaContext{
+			RPC:       "RunE",
+			TenantID:  "teamA",
+			Principal: "alice",
+			TraceID:   "trace-xyz",
+		},
+	}
+}
+
+func logBootstrap(recovered []store.RunRecord) {
+	if len(recovered) == 0 {
+		return
+	}
+	log.Printf("[server] bootstrap: %d run(s) pending re-dispatch", len(recovered))
+	// ASSUMPTION: re-dispatch requires deserializing RunRecord.Payload into
+	// api.RunSpec and calling d.Handle(). Omitted here; callers are
+	// responsible for this loop in production.
+}
+
 func main() {
 	rootCtx := context.Background()
 
 	// ── RunStore: durable-lite JsonRunStore for restart recovery ──────────────
 	// Queued/admitted runs survive process restart.
 	// ASSUMPTION: production replaces with PostgreSQL/Redis.
-	storePath := os.Getenv("RUN_STORE_PATH")
-	if storePath == "" {
-		storePath = "/tmp/spawner-runstore.json"
-	}
+	storePath := runStorePath(os.Getenv)
 	rs, err := store.NewJsonRunStore(storePath)
 	if err != nil {
 		log.Fatalf("runstore init: %v", err)
@@ -91,32 +128,12 @@ func main() {
 	recovered, bootstrapErr := d.Bootstrap(rootCtx)
 	if bootstrapErr != nil {
 		log.Printf("[server] bootstrap error: %v", bootstrapErr)
-	} else if len(recovered) > 0 {
-		log.Printf("[server] bootstrap: %d run(s) pending re-dispatch", len(recovered))
-		// ASSUMPTION: re-dispatch requires deserializing RunRecord.Payload into
-		// api.RunSpec and calling d.Handle(). Omitted here; callers are
-		// responsible for this loop in production.
+	} else {
+		logBootstrap(recovered)
 	}
 
 	// ── Example submission ────────────────────────────────────────────────────
-	in := fdr.ResolveInput{
-		Req: &api.RunSpec{
-			RunID:    "run-001",
-			ImageRef: "ghcr.io/acme/tool@sha256:deadbeef...",
-			Env:      map[string]string{"SAMPLE_ID": "HG001"},
-			Mounts: []api.Mount{
-				{Source: "/data/HG001", Target: "/in", ReadOnly: true},
-				{Source: "workvol", Target: "/work", ReadOnly: false},
-			},
-			Resources: api.Resources{CPU: "2", Memory: "4Gi"},
-		},
-		Meta: fdr.MetaContext{
-			RPC:       "RunE",
-			TenantID:  "teamA",
-			Principal: "alice",
-			TraceID:   "trace-xyz",
-		},
-	}
+	in := sampleInput()
 
 	if err := d.Handle(rootCtx, in, nil); err != nil {
 		if errors.Is(err, sErr.ErrK8sUnavailable) {

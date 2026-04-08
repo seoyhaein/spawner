@@ -68,10 +68,11 @@ The repository now includes direct tests for:
 
 Coverage snapshot:
 
-- Overall statement coverage: `63.5%`
+- Overall statement coverage: `66.2%`
 - `cmd/imp`: `72.1%`
+- `cmd/server`: `29.5%`
 - `pkg/dispatcher`: `73.3%`
-- `pkg/store`: `67.0%`
+- `pkg/store`: `74.8%`
 - `pkg/factory`: `96.8%`
 - `pkg/frontdoor`: `76.3%`
 
