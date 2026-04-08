@@ -139,6 +139,27 @@ func TestBoundedDriver_PreparePassthrough(t *testing.T) {
 	t.Logf("PASS: Prepare() is pass-through, slot count unchanged (%d)", statsAfter.Available)
 }
 
+func TestBoundedDriver_PassthroughMethods(t *testing.T) {
+	inner := &passthroughDriver{}
+	bd := imp.NewBoundedDriver(inner, 2)
+
+	h := dummyHandle{}
+	if _, err := bd.Wait(context.Background(), h); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if err := bd.Signal(context.Background(), h, api.Signal{RunID: "run-1", Name: "term"}); err != nil {
+		t.Fatalf("Signal: %v", err)
+	}
+	if err := bd.Cancel(context.Background(), h); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+
+	if inner.waitCalls != 1 || inner.signalCalls != 1 || inner.cancelCalls != 1 {
+		t.Fatalf("expected passthrough calls = 1/1/1, got wait=%d signal=%d cancel=%d",
+			inner.waitCalls, inner.signalCalls, inner.cancelCalls)
+	}
+}
+
 // ── additional helpers ────────────────────────────────────────────────────────
 
 // heldDriver blocks inside Start() until hold is closed.
@@ -150,4 +171,26 @@ type heldDriver struct {
 func (h *heldDriver) Start(_ context.Context, _ driver.Prepared) (driver.Handle, error) {
 	<-h.hold
 	return dummyHandle{}, nil
+}
+
+type passthroughDriver struct {
+	driver.UnimplementedDriver
+	waitCalls   int
+	signalCalls int
+	cancelCalls int
+}
+
+func (p *passthroughDriver) Wait(context.Context, driver.Handle) (api.Event, error) {
+	p.waitCalls++
+	return api.Event{State: api.StateSucceeded}, nil
+}
+
+func (p *passthroughDriver) Signal(context.Context, driver.Handle, api.Signal) error {
+	p.signalCalls++
+	return nil
+}
+
+func (p *passthroughDriver) Cancel(context.Context, driver.Handle) error {
+	p.cancelCalls++
+	return nil
 }

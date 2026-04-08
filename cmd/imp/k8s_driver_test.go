@@ -164,6 +164,32 @@ func TestDriverK8sWait_ReturnsSucceededEvent(t *testing.T) {
 	}
 }
 
+func TestDriverK8sWait_ReturnsFailedEvent(t *testing.T) {
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: "run-1", Namespace: "default"},
+		Status: batchv1.JobStatus{
+			Conditions: []batchv1.JobCondition{
+				{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Message: "boom"},
+			},
+		},
+	}
+	d := NewK8s("default", k8sfake.NewSimpleClientset(job))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	ev, err := d.Wait(ctx, handleJob{name: "run-1", ns: "default"})
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if ev.State != api.StateFailed {
+		t.Fatalf("expected failed event, got %s", ev.State)
+	}
+	if ev.Message != "boom" {
+		t.Fatalf("unexpected failure message: %q", ev.Message)
+	}
+}
+
 func TestDriverK8sHandleMismatchErrors(t *testing.T) {
 	d := NewK8s("default", k8sfake.NewSimpleClientset())
 
