@@ -42,6 +42,34 @@ Detailed bilingual review documents:
 - Korean: [docs/SPAWNER_REINFORCEMENT_REVIEW.ko.md](docs/SPAWNER_REINFORCEMENT_REVIEW.ko.md)
 - English: [docs/SPAWNER_REINFORCEMENT_REVIEW.en.md](docs/SPAWNER_REINFORCEMENT_REVIEW.en.md)
 
+## Testing And Coverage
+
+Current validation baseline:
+
+- `go test ./...`
+- `TMPDIR=/tmp GOTMPDIR=/tmp GOCACHE=/tmp/go-build go test -coverprofile=/tmp/spawner.cover ./...`
+- `go tool cover -func=/tmp/spawner.cover`
+
+The repository now includes direct tests for:
+
+- `cmd/imp/BoundedDriver`
+- `pkg/dispatcher` ingress boundary behavior
+- `pkg/store` state machine and durable-lite persistence
+- `pkg/factory` actor reuse via `Bind/Register/Unbind`
+- `pkg/frontdoor` predicate composition and cancel-rule construction
+
+Coverage snapshot:
+
+- Overall statement coverage: `31.5%`
+- `cmd/imp`: `4.7%`
+- `pkg/dispatcher`: `73.3%`
+- `pkg/store`: `67.0%`
+- `pkg/factory`: `96.8%`
+- `pkg/frontdoor`: `76.3%`
+
+These numbers are intentionally documented as a moving baseline, not as a completion claim.
+The weakest areas are still the server entrypoint, actor lifecycle edge cases, and live K8s integration paths.
+
 ## Immediate Notes
 
 The previous TODO list is still valid in spirit, but it is now superseded by the structured review documents above.

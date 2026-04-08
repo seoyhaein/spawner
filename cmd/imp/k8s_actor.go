@@ -56,8 +56,6 @@ func (a *K8sActor) OnTerminate(fn func()) { a.onTerm = fn }
 func (a *K8sActor) EnqueueTry(c api.Command) bool                      { return a.mb.TryEnqueue(c) }
 func (a *K8sActor) EnqueueCtx(ctx context.Context, c api.Command) bool { return a.mb.Enqueue(ctx, c) }
 
-func (a *K8sActor) CloseInbox() { a.mb.Close() }
-
 func (a *K8sActor) Loop(ctx context.Context) {
 	defer func() {
 		// 더 이상 새 메시지 금지 + 생산자 종료 후 데이터채널 close
@@ -266,16 +264,6 @@ func (a *K8sActor) Loop(ctx context.Context) {
 					break
 				}
 				_ = a.drv.Signal(context.WithoutCancel(ctx), st.h, *cmd.Signal)
-
-			case api.CmdQuery:
-				a.mu.Lock()
-				n := len(a.active)
-				a.mu.Unlock()
-				if n == 0 {
-					emitState(cmd.Sink, a.key, "", api.StateIdle, "")
-				} else {
-					emitState(cmd.Sink, a.key, "", api.StateRunning, "")
-				}
 			}
 		}
 	}

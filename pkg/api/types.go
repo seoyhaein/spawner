@@ -12,8 +12,6 @@ const (
 	CmdRun CmdKind = iota
 	CmdCancel
 	CmdSignal
-	CmdQuery
-	// 추가
 	CmdBind
 	CmdUnbind
 )
