@@ -30,6 +30,12 @@ func (m *Mailbox[T]) TryEnqueue(v T) bool {
 	select {
 	case <-m.closed:
 		return false
+	default:
+	}
+
+	select {
+	case <-m.closed:
+		return false
 	case m.ch <- v:
 		return true
 	default:
@@ -44,6 +50,13 @@ func (m *Mailbox[T]) Enqueue(ctx context.Context, v T) bool {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+
+	select {
+	case <-m.closed:
+		return false
+	default:
+	}
+
 	select {
 	case <-m.closed:
 		return false
