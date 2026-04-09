@@ -338,6 +338,9 @@ func TestIngress_ReplayRecoverableRunWithPhase_ManualRequeueAllocatesNewAttempt(
 	if got, ok := in.Meta.Get("spawner.attempt_id"); !ok || got != "teamA:run-1/attempt-2" {
 		t.Fatalf("expected replay input to carry explicit attempt id, got %q ok=%v", got, ok)
 	}
+	if got, ok := in.Meta.Get("spawner.attempt_phase"); !ok || got != "manual-requeue" {
+		t.Fatalf("expected replay input to carry manual-requeue phase, got %q ok=%v", got, ok)
+	}
 }
 
 func TestIngress_ReplayRecoverableRunWithPhase_ManualRequeueAppendsAttemptHistory(t *testing.T) {
@@ -374,6 +377,9 @@ func TestIngress_ReplayRecoverableRunWithPhase_ManualRequeueAppendsAttemptHistor
 	if atts[1].AttemptID != "teamA:run-1/attempt-2" {
 		t.Fatalf("expected appended attempt-2, got %q", atts[1].AttemptID)
 	}
+	if atts[1].Cause != store.AttemptCauseManualRequeue {
+		t.Fatalf("expected manual requeue cause, got %q", atts[1].Cause)
+	}
 }
 
 func TestIngress_PrepareReplayInput_RecoveryKeepsAttempt(t *testing.T) {
@@ -399,6 +405,9 @@ func TestIngress_PrepareReplayInput_RecoveryKeepsAttempt(t *testing.T) {
 	}
 	if got, ok := in.Meta.Get("spawner.attempt_id"); !ok || got != "teamA:run-1/attempt-1" {
 		t.Fatalf("expected recovery replay to keep attempt id, got %q ok=%v", got, ok)
+	}
+	if got, ok := in.Meta.Get("spawner.attempt_phase"); !ok || got != "recovery-replay" {
+		t.Fatalf("expected replay input to carry recovery-replay phase, got %q ok=%v", got, ok)
 	}
 }
 
@@ -446,6 +455,16 @@ func TestIngress_IdempotentEnqueue(t *testing.T) {
 	// Second call with same RunID: should not fail with ErrAlreadyExists
 	if err := d.Handle(ctx, testInput(), nil); err != nil {
 		t.Fatalf("second Handle (re-submit): %v", err)
+	}
+	atts, err := rs.ListAttempts(ctx, "teamA:run-001")
+	if err != nil {
+		t.Fatalf("ListAttempts: %v", err)
+	}
+	if len(atts) != 1 {
+		t.Fatalf("expected duplicate submit to stay on one attempt, got %d", len(atts))
+	}
+	if atts[0].Cause != store.AttemptCauseInitialSubmit {
+		t.Fatalf("expected duplicate submit to preserve initial cause, got %q", atts[0].Cause)
 	}
 	t.Log("PASS: duplicate RunID enqueue is idempotent")
 }

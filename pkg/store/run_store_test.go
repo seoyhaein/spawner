@@ -83,6 +83,26 @@ func TestIsRecoverable(t *testing.T) {
 	}
 }
 
+func TestAttemptCause_IsValid(t *testing.T) {
+	cases := []struct {
+		cause store.AttemptCause
+		want  bool
+	}{
+		{cause: store.AttemptCauseInitialSubmit, want: true},
+		{cause: store.AttemptCauseRecoveryReplay, want: true},
+		{cause: store.AttemptCauseManualRequeue, want: true},
+		{cause: store.AttemptCauseAutoRetry, want: true},
+		{cause: store.AttemptCause(""), want: false},
+		{cause: store.AttemptCause("replay-or-requeue"), want: false},
+	}
+
+	for _, tc := range cases {
+		if got := tc.cause.IsValid(); got != tc.want {
+			t.Fatalf("AttemptCause(%q).IsValid() = %v, want %v", tc.cause, got, tc.want)
+		}
+	}
+}
+
 // ── InMemoryRunStore ──────────────────────────────────────────────────────────
 
 // TestMemoryStore_DoesNotSurviveReset proves that a new InMemoryRunStore
@@ -185,7 +205,7 @@ func TestMemoryStore_AttemptHistory(t *testing.T) {
 		RunID:     "run-1",
 		State:     store.StateQueued,
 		Payload:   []byte("second"),
-		Reason:    "manual-requeue",
+		Cause:     store.AttemptCauseManualRequeue,
 	}); err != nil {
 		t.Fatalf("AppendAttempt: %v", err)
 	}
@@ -204,6 +224,34 @@ func TestMemoryStore_AttemptHistory(t *testing.T) {
 	}
 	if len(atts) != 2 {
 		t.Fatalf("expected 2 attempts, got %d", len(atts))
+	}
+	if atts[0].Cause != store.AttemptCauseInitialSubmit {
+		t.Fatalf("expected initial submit cause, got %q", atts[0].Cause)
+	}
+	if atts[1].Cause != store.AttemptCauseManualRequeue {
+		t.Fatalf("expected manual requeue cause, got %q", atts[1].Cause)
+	}
+}
+
+func TestMemoryStore_RejectsInvalidAttemptCause(t *testing.T) {
+	ctx := context.Background()
+	s := store.NewInMemoryRunStore()
+	if err := s.Enqueue(ctx, store.RunRecord{
+		RunID:           "run-1",
+		State:           store.StateQueued,
+		LatestAttemptID: "run-1/attempt-1",
+	}); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	err := s.AppendAttempt(ctx, store.AttemptRecord{
+		AttemptID: "run-1/attempt-2",
+		RunID:     "run-1",
+		State:     store.StateQueued,
+		Cause:     store.AttemptCause("replay-or-requeue"),
+	})
+	if err != store.ErrInvalidAttempt {
+		t.Fatalf("expected ErrInvalidAttempt, got %v", err)
 	}
 }
 
@@ -267,7 +315,7 @@ func TestJsonStore_AttemptHistoryAfterRestart(t *testing.T) {
 		RunID:     "run-1",
 		State:     store.StateQueued,
 		Payload:   []byte("second"),
-		Reason:    "manual-requeue",
+		Cause:     store.AttemptCauseManualRequeue,
 	}); err != nil {
 		t.Fatalf("AppendAttempt: %v", err)
 	}
@@ -286,5 +334,8 @@ func TestJsonStore_AttemptHistoryAfterRestart(t *testing.T) {
 	}
 	if !ok || latest.AttemptID != "run-1/attempt-2" {
 		t.Fatalf("expected latest attempt-2 after restart, got %+v", latest)
+	}
+	if latest.Cause != store.AttemptCauseManualRequeue {
+		t.Fatalf("expected latest cause manual-requeue, got %q", latest.Cause)
 	}
 }

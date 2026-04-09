@@ -52,6 +52,7 @@ var (
 	ErrInvalidTransition = errors.New("invalid state transition")
 	ErrNotFound          = errors.New("run not found")
 	ErrAlreadyExists     = errors.New("run already exists")
+	ErrInvalidAttempt    = errors.New("invalid attempt record")
 )
 
 // RunRecord is the persisted representation of a submitted DAG run.
@@ -64,12 +65,21 @@ type RunRecord struct {
 	UpdatedAt       time.Time
 }
 
+type AttemptCause string
+
+const (
+	AttemptCauseInitialSubmit  AttemptCause = "initial-submit"
+	AttemptCauseRecoveryReplay AttemptCause = "recovery-replay"
+	AttemptCauseManualRequeue  AttemptCause = "manual-requeue"
+	AttemptCauseAutoRetry      AttemptCause = "auto-retry"
+)
+
 type AttemptRecord struct {
 	AttemptID string
 	RunID     string
 	State     RunState
 	Payload   []byte
-	Reason    string
+	Cause     AttemptCause
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -111,4 +121,23 @@ func IsTerminal(s RunState) bool {
 // recovery, and explicitly held runs remain an operator/policy decision.
 func IsRecoverable(s RunState) bool {
 	return s == StateQueued || s == StateAdmittedToDag
+}
+
+func (c AttemptCause) IsValid() bool {
+	switch c {
+	case AttemptCauseInitialSubmit, AttemptCauseRecoveryReplay, AttemptCauseManualRequeue, AttemptCauseAutoRetry:
+		return true
+	default:
+		return false
+	}
+}
+
+func ValidateAttempt(attempt AttemptRecord) error {
+	if attempt.RunID == "" || attempt.AttemptID == "" {
+		return ErrInvalidAttempt
+	}
+	if !attempt.Cause.IsValid() {
+		return ErrInvalidAttempt
+	}
+	return nil
 }

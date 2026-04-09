@@ -41,6 +41,7 @@ type RecoverableRun struct {
 const (
 	metaLogicalRunID = "spawner.logical_run_id"
 	metaAttemptID    = "spawner.attempt_id"
+	metaAttemptPhase = "spawner.attempt_phase"
 )
 
 func (r RecoverableRun) ResolveInput() frontdoor.ResolveInput {
@@ -207,7 +208,9 @@ func (d *Dispatcher) PrepareReplayInput(rr RecoverableRun, phase ply.AttemptPhas
 	if d.attemptPolicy.UseNewAttempt(phase) {
 		attemptID = nextAttemptID(rr.Envelope.Identity.LogicalRunID, rr.Envelope.Identity.AttemptID)
 	}
-	return rr.ResolveInputWithAttempt(attemptID), nil
+	in := rr.ResolveInputWithAttempt(attemptID)
+	in.Meta.Set(metaAttemptPhase, attemptPhaseName(phase))
+	return in, nil
 }
 
 func (d *Dispatcher) ReplayRecoverableRunWithPhase(
@@ -282,6 +285,32 @@ func attemptIDFromInput(in frontdoor.ResolveInput, logicalRunID string) string {
 		return strings.TrimSpace(v)
 	}
 	return initialAttemptID(logicalRunID)
+}
+
+func attemptPhaseName(phase ply.AttemptPhase) string {
+	switch phase {
+	case ply.AttemptPhaseRecoveryReplay:
+		return "recovery-replay"
+	case ply.AttemptPhaseManualRequeue:
+		return "manual-requeue"
+	case ply.AttemptPhaseAutoRetry:
+		return "auto-retry"
+	default:
+		return "initial-submit"
+	}
+}
+
+func attemptCauseFromInput(in frontdoor.ResolveInput) store.AttemptCause {
+	switch v, _ := in.Meta.Get(metaAttemptPhase); v {
+	case "recovery-replay":
+		return store.AttemptCauseRecoveryReplay
+	case "manual-requeue":
+		return store.AttemptCauseManualRequeue
+	case "auto-retry":
+		return store.AttemptCauseAutoRetry
+	default:
+		return store.AttemptCauseInitialSubmit
+	}
 }
 
 func buildRunEnvelope(in frontdoor.ResolveInput, rr frontdoor.ResolveResult) (api.RunEnvelope, error) {
@@ -398,7 +427,7 @@ func (d *Dispatcher) Handle(ctx context.Context, in frontdoor.ResolveInput, sink
 					RunID:     logicalRunID,
 					State:     store.StateQueued,
 					Payload:   payload,
-					Reason:    "replay-or-requeue",
+					Cause:     attemptCauseFromInput(in),
 				}); err != nil {
 					return err
 				}

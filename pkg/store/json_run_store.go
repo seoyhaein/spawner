@@ -76,6 +76,7 @@ func (s *JsonRunStore) load() error {
 			RunID:     rec.RunID,
 			State:     rec.State,
 			Payload:   rec.Payload,
+			Cause:     AttemptCauseInitialSubmit,
 			CreatedAt: rec.CreatedAt,
 			UpdatedAt: rec.UpdatedAt,
 		}}
@@ -132,6 +133,7 @@ func (s *JsonRunStore) Enqueue(_ context.Context, rec RunRecord) error {
 		RunID:     rec.RunID,
 		State:     rec.State,
 		Payload:   rec.Payload,
+		Cause:     AttemptCauseInitialSubmit,
 		CreatedAt: now,
 		UpdatedAt: now,
 	})
@@ -199,8 +201,8 @@ func (s *JsonRunStore) AppendAttempt(_ context.Context, attempt AttemptRecord) e
 	if !ok {
 		return ErrNotFound
 	}
-	if attempt.AttemptID == "" {
-		return ErrAlreadyExists
+	if err := ValidateAttempt(attempt); err != nil {
+		return err
 	}
 	now := time.Now()
 	attempt.CreatedAt = now

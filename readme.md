@@ -43,6 +43,8 @@ Detailed bilingual review documents:
 - English: [docs/SPAWNER_REINFORCEMENT_REVIEW.en.md](docs/SPAWNER_REINFORCEMENT_REVIEW.en.md)
 - Korean sprint plan: [docs/SPAWNER_SPRINT_PLAN.ko.md](docs/SPAWNER_SPRINT_PLAN.ko.md)
 - English sprint plan: [docs/SPAWNER_SPRINT_PLAN.en.md](docs/SPAWNER_SPRINT_PLAN.en.md)
+- Korean recovery contract: [docs/SPAWNER_RECOVERY_CONTRACT.ko.md](docs/SPAWNER_RECOVERY_CONTRACT.ko.md)
+- English recovery contract: [docs/SPAWNER_RECOVERY_CONTRACT.en.md](docs/SPAWNER_RECOVERY_CONTRACT.en.md)
 
 ## Testing And Coverage
 
