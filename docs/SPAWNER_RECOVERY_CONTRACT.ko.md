@@ -38,6 +38,20 @@
 
 이 상태는 persisted state와 1:1 대응이 아니다. persisted state는 recovery와 durable gate 의미를, event state는 관측 의미를 담당한다.
 
+현재 canonical projection은 아래처럼 본다.
+
+| Persisted State | Primary Event |
+| --- | --- |
+| `queued` | `queued` |
+| `held` | none |
+| `resumed` | none |
+| `admitted-to-dag` | `starting` |
+| `running` | `running` |
+| `finished` | `succeeded` |
+| `canceled` | `cancelled` |
+
+`held`, `resumed`는 durable control state라서 직접 event로 투영하지 않는다.
+
 ## Attempt Cause
 
 `AttemptRecord`는 자유 문자열 reason 대신 typed cause를 사용한다.
@@ -67,4 +81,3 @@
 
 - 실패한 run을 자동 재시도하지는 않는다
 - 하지만 애매한 중간 상태는 유실하지 않고 replay 가능하게 둔다
-

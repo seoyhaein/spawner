@@ -38,6 +38,20 @@ Event states are transient, operator-facing execution states.
 
 These are not a 1:1 mirror of persisted states. Persisted states carry durable ingress/recovery meaning, while event states carry observation meaning.
 
+The current canonical projection is:
+
+| Persisted State | Primary Event |
+| --- | --- |
+| `queued` | `queued` |
+| `held` | none |
+| `resumed` | none |
+| `admitted-to-dag` | `starting` |
+| `running` | `running` |
+| `finished` | `succeeded` |
+| `canceled` | `cancelled` |
+
+`held` and `resumed` are durable control states, so they intentionally do not project to direct execution events.
+
 ## Attempt Cause
 
 `AttemptRecord` now uses a typed cause instead of a free-form string.
@@ -67,4 +81,3 @@ So the current default philosophy separates "fast-fail execution" from "recovery
 
 - failed runs are not automatically retried
 - ambiguous in-between states are not lost and remain replayable
-
