@@ -118,7 +118,7 @@ var CancelRule = Rule{
 	BuildCmd: func(in ResolveInput) (api.Command, error) {
 		cr := in.Req.(*api.CancelReq)
 		pol := policy.DefaultPolicyB(0) // 혹은 policyFn에서 Cancel에 맞는 일부만 사용
-		return api.Command{Kind: api.CmdCancel, Cancel: cr, Policy: pol}, nil
+		return api.NewCancelCommand(cr, pol)
 	},
 }
 

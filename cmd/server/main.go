@@ -30,11 +30,7 @@ func runRule() fdr.Rule {
 		},
 		BuildCmd: func(in fdr.ResolveInput) (api.Command, error) {
 			rs := in.Req.(*api.RunSpec)
-			return api.Command{
-				Kind:   api.CmdRun,
-				Run:    rs,
-				Policy: ply.DefaultPolicyB(5 * time.Minute),
-			}, nil
+			return api.NewRunCommand(rs, ply.DefaultPolicyB(5*time.Minute))
 		},
 	}
 }

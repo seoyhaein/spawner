@@ -48,7 +48,7 @@ func newTestDispatcher(rs store.RunStore, opts ...dispatcher.Option) (*dispatche
 	mf := &mockFactory{act: act}
 	fd := &mockFD{
 		key: "teamA:run-001",
-		cmd: api.Command{Kind: api.CmdRun, Run: &api.RunSpec{RunID: "run-001"}},
+		cmd: api.Command{Kind: api.CmdRun, Run: &api.RunSpec{RunID: "run-001", ImageRef: "busybox:1.36"}},
 	}
 	baseOpts := []dispatcher.Option{dispatcher.WithRunStore(rs)}
 	return dispatcher.NewDispatcher(fd, mf, 4, append(baseOpts, opts...)...), act
@@ -56,7 +56,7 @@ func newTestDispatcher(rs store.RunStore, opts ...dispatcher.Option) (*dispatche
 
 func testInput() frontdoor.ResolveInput {
 	return frontdoor.ResolveInput{
-		Req: &api.RunSpec{RunID: "run-001"},
+		Req: &api.RunSpec{RunID: "run-001", ImageRef: "busybox:1.36"},
 		Meta: frontdoor.MetaContext{
 			RPC:      "RunE",
 			TenantID: "teamA",
@@ -174,7 +174,7 @@ func TestIngress_BootstrapRecoversByState(t *testing.T) {
 func TestIngress_BootstrapIsNopWithoutRunStore(t *testing.T) {
 	ctx := context.Background()
 	act := &mockActor{}
-	fd := &mockFD{key: "k", cmd: api.Command{Kind: api.CmdRun}}
+	fd := &mockFD{key: "k", cmd: api.Command{Kind: api.CmdRun, Run: &api.RunSpec{RunID: "run-boot", ImageRef: "busybox:1.36"}}}
 	d := dispatcher.NewDispatcher(fd, &mockFactory{act: act}, 2)
 
 	recovered, err := d.Bootstrap(ctx)
@@ -252,7 +252,7 @@ func (f *lifecycleFactory) Unbind(spawnKey string, act actor.Actor) {
 func TestIngress_ReleasesSlotAfterActorBecomesIdle(t *testing.T) {
 	fd := &mockFD{
 		key: "teamA:run-001",
-		cmd: api.Command{Kind: api.CmdRun, Run: &api.RunSpec{RunID: "run-001"}},
+		cmd: api.Command{Kind: api.CmdRun, Run: &api.RunSpec{RunID: "run-001", ImageRef: "busybox:1.36"}},
 	}
 	act := &lifecycleActor{}
 	f := &lifecycleFactory{act: act, bound: make(map[string]actor.Actor)}
@@ -264,9 +264,9 @@ func TestIngress_ReleasesSlotAfterActorBecomesIdle(t *testing.T) {
 	}
 
 	fd.key = "teamA:run-002"
-	fd.cmd = api.Command{Kind: api.CmdRun, Run: &api.RunSpec{RunID: "run-002"}}
+	fd.cmd = api.Command{Kind: api.CmdRun, Run: &api.RunSpec{RunID: "run-002", ImageRef: "busybox:1.36"}}
 	input2 := frontdoor.ResolveInput{
-		Req: &api.RunSpec{RunID: "run-002"},
+		Req: &api.RunSpec{RunID: "run-002", ImageRef: "busybox:1.36"},
 		Meta: frontdoor.MetaContext{
 			RPC:      "RunE",
 			TenantID: "teamA",

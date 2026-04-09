@@ -141,31 +141,7 @@ func validateResolvedCommand(rr frontdoor.ResolveResult) error {
 	if strings.TrimSpace(rr.SpawnKey) == "" {
 		return sErr.ErrInvalidSpawnKey
 	}
-
-	switch rr.Cmd.Kind {
-	case api.CmdRun:
-		if rr.Cmd.Run == nil || strings.TrimSpace(rr.Cmd.Run.RunID) == "" {
-			return sErr.ErrInvalidCommand
-		}
-	case api.CmdCancel:
-		if rr.Cmd.Cancel == nil {
-			return sErr.ErrInvalidCommand
-		}
-	case api.CmdSignal:
-		if rr.Cmd.Signal == nil || strings.TrimSpace(rr.Cmd.Signal.RunID) == "" {
-			return sErr.ErrInvalidCommand
-		}
-	case api.CmdBind:
-		if rr.Cmd.Bind == nil || strings.TrimSpace(rr.Cmd.Bind.SpawnKey) == "" {
-			return sErr.ErrInvalidCommand
-		}
-	case api.CmdUnbind:
-		if rr.Cmd.Unbind == nil {
-			return sErr.ErrInvalidCommand
-		}
-	}
-
-	return nil
+	return rr.Cmd.Validate()
 }
 
 // Handle Resolve → (없으면) 세마확보 → Bind → Register → CmdBind → Enqueue
@@ -248,11 +224,13 @@ func (d *Dispatcher) Handle(ctx context.Context, in frontdoor.ResolveInput, sink
 			d.AF.Register(rr.SpawnKey, act)
 
 			// 7) 액터에 바인드 이벤트 전달
-			bindCmd := api.Command{
-				Kind: api.CmdBind,
-				Bind: &api.Bind{SpawnKey: rr.SpawnKey},
-				Sink: s,
+			bindCmd, err := api.NewBindCommand(&api.Bind{SpawnKey: rr.SpawnKey})
+			if err != nil {
+				d.AF.Unbind(rr.SpawnKey, act)
+				<-d.Sem
+				return err
 			}
+			bindCmd.Sink = s
 
 			sendCtx := ctx
 			cancel := func() {}

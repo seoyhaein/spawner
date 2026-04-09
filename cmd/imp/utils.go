@@ -18,6 +18,10 @@ func sendWithTimeout(s api.EventSink, ev api.Event, d time.Duration) {
 	if s == nil {
 		return
 	}
+	if ts, ok := s.(api.TryEventSink); ok {
+		_ = ts.TrySend(ev, d)
+		return
+	}
 	done := make(chan struct{})
 	go func() { s.Send(ev); close(done) }()
 	select {

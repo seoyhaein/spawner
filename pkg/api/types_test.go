@@ -1,0 +1,77 @@
+package api_test
+
+import (
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/seoyhaein/spawner/pkg/api"
+	sErr "github.com/seoyhaein/spawner/pkg/error"
+	"github.com/seoyhaein/spawner/pkg/policy"
+)
+
+func TestRunSpecValidate(t *testing.T) {
+	valid := api.RunSpec{RunID: "run-1", ImageRef: "busybox:1.36"}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("expected valid spec, got %v", err)
+	}
+
+	if err := (api.RunSpec{}).Validate(); !errors.Is(err, sErr.ErrInvalidCommand) {
+		t.Fatalf("expected ErrInvalidCommand for empty spec, got %v", err)
+	}
+}
+
+func TestCommandConstructorsAndValidate(t *testing.T) {
+	runCmd, err := api.NewRunCommand(&api.RunSpec{RunID: "run-1", ImageRef: "busybox:1.36"}, policy.DefaultPolicyB(time.Second))
+	if err != nil {
+		t.Fatalf("NewRunCommand: %v", err)
+	}
+	if err := runCmd.Validate(); err != nil {
+		t.Fatalf("Validate run command: %v", err)
+	}
+
+	cancelCmd, err := api.NewCancelCommand(&api.CancelReq{RunID: "run-1"}, policy.DefaultPolicyB(0))
+	if err != nil {
+		t.Fatalf("NewCancelCommand: %v", err)
+	}
+	if err := cancelCmd.Validate(); err != nil {
+		t.Fatalf("Validate cancel command: %v", err)
+	}
+
+	signalCmd, err := api.NewSignalCommand(&api.Signal{RunID: "run-1", Name: "term"}, policy.DefaultPolicyB(0))
+	if err != nil {
+		t.Fatalf("NewSignalCommand: %v", err)
+	}
+	if err := signalCmd.Validate(); err != nil {
+		t.Fatalf("Validate signal command: %v", err)
+	}
+
+	bindCmd, err := api.NewBindCommand(&api.Bind{SpawnKey: "tenant:run-1"})
+	if err != nil {
+		t.Fatalf("NewBindCommand: %v", err)
+	}
+	if err := bindCmd.Validate(); err != nil {
+		t.Fatalf("Validate bind command: %v", err)
+	}
+
+	unbindCmd := api.NewUnbindCommand()
+	if err := unbindCmd.Validate(); err != nil {
+		t.Fatalf("Validate unbind command: %v", err)
+	}
+}
+
+func TestCommandValidateRejectsInvalidPayloads(t *testing.T) {
+	cases := []api.Command{
+		{Kind: api.CmdRun},
+		{Kind: api.CmdCancel},
+		{Kind: api.CmdSignal, Signal: &api.Signal{}},
+		{Kind: api.CmdBind, Bind: &api.Bind{}},
+		{Kind: api.CmdUnbind},
+	}
+
+	for _, tc := range cases {
+		if err := tc.Validate(); !errors.Is(err, sErr.ErrInvalidCommand) {
+			t.Fatalf("expected ErrInvalidCommand for %+v, got %v", tc, err)
+		}
+	}
+}

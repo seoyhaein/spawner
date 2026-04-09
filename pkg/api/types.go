@@ -1,8 +1,10 @@
 package api
 
 import (
+	"strings"
 	"time"
 
+	sErr "github.com/seoyhaein/spawner/pkg/error"
 	ply "github.com/seoyhaein/spawner/pkg/policy"
 )
 
@@ -35,6 +37,62 @@ type Command struct {
 	Sink   EventSink
 }
 
+func NewRunCommand(run *RunSpec, policy ply.AdmitPolicy) (Command, error) {
+	cmd := Command{Kind: CmdRun, Run: run, Policy: policy}
+	return cmd, cmd.Validate()
+}
+
+func NewCancelCommand(cancel *CancelReq, policy ply.AdmitPolicy) (Command, error) {
+	cmd := Command{Kind: CmdCancel, Cancel: cancel, Policy: policy}
+	return cmd, cmd.Validate()
+}
+
+func NewSignalCommand(sig *Signal, policy ply.AdmitPolicy) (Command, error) {
+	cmd := Command{Kind: CmdSignal, Signal: sig, Policy: policy}
+	return cmd, cmd.Validate()
+}
+
+func NewBindCommand(bind *Bind) (Command, error) {
+	cmd := Command{Kind: CmdBind, Bind: bind}
+	return cmd, cmd.Validate()
+}
+
+func NewUnbindCommand() Command {
+	return Command{Kind: CmdUnbind, Unbind: &Unbind{}}
+}
+
+func (c Command) Validate() error {
+	switch c.Kind {
+	case CmdRun:
+		if c.Run == nil {
+			return sErr.ErrInvalidCommand
+		}
+		return c.Run.Validate()
+	case CmdCancel:
+		if c.Cancel == nil {
+			return sErr.ErrInvalidCommand
+		}
+		return nil
+	case CmdSignal:
+		if c.Signal == nil || strings.TrimSpace(c.Signal.RunID) == "" {
+			return sErr.ErrInvalidCommand
+		}
+		return nil
+	case CmdBind:
+		if c.Bind == nil || strings.TrimSpace(c.Bind.SpawnKey) == "" {
+			return sErr.ErrInvalidCommand
+		}
+		return nil
+	case CmdUnbind:
+		if c.Unbind == nil {
+			return sErr.ErrInvalidCommand
+		}
+		return nil
+	default:
+		return sErr.ErrInvalidCommand
+	}
+}
+
 type RunSpec struct {
 	RunID     string
 	ImageRef  string // digest-locked preferred
@@ -43,6 +101,16 @@ type RunSpec struct {
 	Labels    map[string]string // K8s labels; kueue.x-k8s.io/queue-name goes here
 	Mounts    []Mount
 	Resources Resources
+}
+
+func (r RunSpec) Validate() error {
+	if strings.TrimSpace(r.RunID) == "" {
+		return sErr.ErrInvalidCommand
+	}
+	if strings.TrimSpace(r.ImageRef) == "" {
+		return sErr.ErrInvalidCommand
+	}
+	return nil
 }
 
 type Mount struct {
@@ -109,4 +177,8 @@ type Event struct {
 // Keep it simple here to decouple from transport.
 type EventSink interface {
 	Send(Event)
+}
+
+type TryEventSink interface {
+	TrySend(Event, time.Duration) bool
 }
