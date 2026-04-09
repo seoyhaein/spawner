@@ -3,6 +3,7 @@ package frontdoor
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/seoyhaein/spawner/pkg/api"
@@ -41,11 +42,15 @@ func (fd *TableFrontDoor) Resolve(ctx context.Context, in ResolveInput) (Resolve
 			if err != nil {
 				return ResolveResult{}, err
 			}
+			spawnKey := strings.TrimSpace(rl.SpawnKeyFn(in))
+			if spawnKey == "" {
+				return ResolveResult{}, fmt.Errorf("%w: rpc=%s", sErr.ErrInvalidSpawnKey, in.Meta.RPC)
+			}
 			if cmd.Policy.Timeout == 0 {
 				cmd.Policy = ply.DefaultPolicyB(30 * time.Minute) // TODO cmd 에 넣은 것은 생각을 해주자.
 			}
 			return ResolveResult{
-				SpawnKey: rl.SpawnKeyFn(in),
+				SpawnKey: spawnKey,
 				Cmd:      cmd,
 			}, nil
 		}

@@ -1,9 +1,12 @@
 package frontdoor_test
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/seoyhaein/spawner/pkg/api"
+	sErr "github.com/seoyhaein/spawner/pkg/error"
 	"github.com/seoyhaein/spawner/pkg/frontdoor"
 )
 
@@ -70,5 +73,23 @@ func TestCancelRule_PrefersSpawnIDThenIdemKey(t *testing.T) {
 	}
 	if got := frontdoor.CancelRule.SpawnKeyFn(withIdemKey); got != "" {
 		t.Fatalf("expected unresolved idemKey lookup to return empty string, got %q", got)
+	}
+}
+
+func TestTableFrontDoor_RejectsEmptySpawnKey(t *testing.T) {
+	fd := frontdoor.NewTableFrontDoor(frontdoor.Rule{
+		Match:      func(frontdoor.ResolveInput) bool { return true },
+		SpawnKeyFn: func(frontdoor.ResolveInput) string { return "   " },
+		BuildCmd: func(in frontdoor.ResolveInput) (api.Command, error) {
+			return api.Command{Kind: api.CmdRun, Run: &api.RunSpec{RunID: "run-1"}}, nil
+		},
+	})
+
+	_, err := fd.Resolve(context.Background(), frontdoor.ResolveInput{
+		Req:  &api.RunSpec{RunID: "run-1"},
+		Meta: frontdoor.MetaContext{RPC: "RunE"},
+	})
+	if !errors.Is(err, sErr.ErrInvalidSpawnKey) {
+		t.Fatalf("expected ErrInvalidSpawnKey, got %v", err)
 	}
 }

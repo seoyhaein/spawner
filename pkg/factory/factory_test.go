@@ -16,6 +16,7 @@ type testActor struct{ id int }
 
 func (testActor) EnqueueTry(api.Command) bool                  { return true }
 func (testActor) EnqueueCtx(context.Context, api.Command) bool { return true }
+func (testActor) OnIdle(func())                                {}
 func (testActor) OnTerminate(func())                           {}
 func (testActor) Loop(context.Context)                         {}
 

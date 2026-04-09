@@ -21,6 +21,7 @@ type K8sActor struct {
 	mb  *actor.Mailbox[api.Command]
 	drv driver.Driver // 구체타입(DriverK8s) 말고 인터페이스
 
+	onIdle func()
 	onTerm func()
 
 	mu sync.Mutex
@@ -51,6 +52,7 @@ func NewK8sActor(key string, drv driver.Driver, mbSize int) *K8sActor {
 	}
 }
 
+func (a *K8sActor) OnIdle(fn func())      { a.onIdle = fn }
 func (a *K8sActor) OnTerminate(fn func()) { a.onTerm = fn }
 
 func (a *K8sActor) EnqueueTry(c api.Command) bool                      { return a.mb.TryEnqueue(c) }
@@ -126,6 +128,10 @@ func (a *K8sActor) Loop(ctx context.Context) {
 
 			// ===== 실행/제어 =====
 			case api.CmdRun:
+				if cmd.Run == nil {
+					emitErr(cmd.Sink, a.key, "", errors.New("missing run payload"))
+					break
+				}
 				// 바인딩 여부 가드
 				a.mu.Lock()
 				if a.boundKey == "" {
@@ -169,13 +175,28 @@ func (a *K8sActor) Loop(ctx context.Context) {
 
 				go func(runID string, c api.Command, runCtx context.Context, cancel context.CancelFunc) {
 					defer func() {
+						var becameIdle bool
+						var idleFn func()
+
 						// 종료 처리: cancel 호출, active에서 제거, 슬롯/카운터 반납
 						cancel()
 						a.mu.Lock()
 						delete(a.active, runID)
+						if len(a.active) == 0 && a.boundKey != "" {
+							a.boundKey = ""
+							becameIdle = true
+							idleFn = a.onIdle
+						}
 						a.mu.Unlock()
 						<-a.execSem
 						a.execWG.Done()
+
+						if becameIdle {
+							emitState(c.Sink, a.key, "", api.StateIdle, "unbound")
+							if idleFn != nil {
+								idleFn()
+							}
+						}
 					}()
 
 					p, err := a.drv.Prepare(runCtx, *c.Run)
@@ -203,6 +224,10 @@ func (a *K8sActor) Loop(ctx context.Context) {
 				}(runID, cmd, runCtx, cancel)
 
 			case api.CmdCancel:
+				if cmd.Cancel == nil {
+					emitErr(cmd.Sink, a.key, "", errors.New("missing cancel payload"))
+					break
+				}
 				// 바인딩 여부 가드
 				a.mu.Lock()
 				if a.boundKey == "" {

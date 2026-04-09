@@ -29,6 +29,7 @@ type mockActor struct{ enqueueCalled int }
 
 func (m *mockActor) EnqueueTry(api.Command) bool                      { m.enqueueCalled++; return true }
 func (m *mockActor) EnqueueCtx(_ context.Context, _ api.Command) bool { m.enqueueCalled++; return true }
+func (m *mockActor) OnIdle(func())                                    {}
 func (m *mockActor) OnTerminate(func())                               {}
 func (m *mockActor) Loop(_ context.Context)                           {}
 
@@ -206,3 +207,104 @@ func TestIngress_IdempotentEnqueue(t *testing.T) {
 
 // Ensure dispatcher.Option type is usable (compile check for WithEnqueueTimeout).
 var _ = dispatcher.WithEnqueueTimeout(time.Second)
+
+type lifecycleActor struct {
+	idleFn func()
+}
+
+func (a *lifecycleActor) EnqueueTry(api.Command) bool { return true }
+func (a *lifecycleActor) EnqueueCtx(_ context.Context, cmd api.Command) bool {
+	if cmd.Kind == api.CmdRun && a.idleFn != nil {
+		go a.idleFn()
+	}
+	return true
+}
+func (a *lifecycleActor) OnIdle(fn func())       { a.idleFn = fn }
+func (a *lifecycleActor) OnTerminate(func())     {}
+func (a *lifecycleActor) Loop(_ context.Context) {}
+
+type lifecycleFactory struct {
+	act     *lifecycleActor
+	created int
+	bound   map[string]actor.Actor
+}
+
+func (f *lifecycleFactory) Get(spawnKey string) (actor.Actor, bool) {
+	act, ok := f.bound[spawnKey]
+	return act, ok
+}
+
+func (f *lifecycleFactory) Bind(_ string) (actor.Actor, bool, error) {
+	f.created++
+	return f.act, true, nil
+}
+
+func (f *lifecycleFactory) Register(spawnKey string, act actor.Actor) {
+	f.bound[spawnKey] = act
+}
+
+func (f *lifecycleFactory) Unbind(spawnKey string, act actor.Actor) {
+	if cur, ok := f.bound[spawnKey]; ok && cur == act {
+		delete(f.bound, spawnKey)
+	}
+}
+
+func TestIngress_ReleasesSlotAfterActorBecomesIdle(t *testing.T) {
+	fd := &mockFD{
+		key: "teamA:run-001",
+		cmd: api.Command{Kind: api.CmdRun, Run: &api.RunSpec{RunID: "run-001"}},
+	}
+	act := &lifecycleActor{}
+	f := &lifecycleFactory{act: act, bound: make(map[string]actor.Actor)}
+	d := dispatcher.NewDispatcher(fd, f, 1)
+
+	input1 := testInput()
+	if err := d.Handle(context.Background(), input1, nil); err != nil {
+		t.Fatalf("first Handle: %v", err)
+	}
+
+	fd.key = "teamA:run-002"
+	fd.cmd = api.Command{Kind: api.CmdRun, Run: &api.RunSpec{RunID: "run-002"}}
+	input2 := frontdoor.ResolveInput{
+		Req: &api.RunSpec{RunID: "run-002"},
+		Meta: frontdoor.MetaContext{
+			RPC:      "RunE",
+			TenantID: "teamA",
+			TraceID:  "trace-002",
+		},
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		err := d.Handle(context.Background(), input2, nil)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, sErr.ErrSaturated) {
+			t.Fatalf("second Handle: %v", err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for semaphore release after actor became idle")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestIngress_DoesNotPersistInvalidResolvedRun(t *testing.T) {
+	ctx := context.Background()
+	rs := store.NewInMemoryRunStore()
+	fd := &mockFD{
+		key: "teamA:run-001",
+		cmd: api.Command{Kind: api.CmdRun, Run: nil},
+	}
+	d := dispatcher.NewDispatcher(fd, &mockFactory{act: &mockActor{}}, 1, dispatcher.WithRunStore(rs))
+
+	err := d.Handle(ctx, testInput(), nil)
+	if !errors.Is(err, sErr.ErrInvalidCommand) {
+		t.Fatalf("expected ErrInvalidCommand, got %v", err)
+	}
+
+	if _, ok, _ := rs.Get(ctx, "teamA:run-001"); ok {
+		t.Fatal("invalid resolved run should not be persisted to RunStore")
+	}
+}

@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"strings"
+	"sync"
 	"time"
 
+	"github.com/seoyhaein/spawner/pkg/actor"
 	"github.com/seoyhaein/spawner/pkg/api"
 	sErr "github.com/seoyhaein/spawner/pkg/error"
 	fac "github.com/seoyhaein/spawner/pkg/factory"
@@ -134,6 +137,37 @@ func runIDFromInput(in frontdoor.ResolveInput) string {
 	return in.Meta.TraceID
 }
 
+func validateResolvedCommand(rr frontdoor.ResolveResult) error {
+	if strings.TrimSpace(rr.SpawnKey) == "" {
+		return sErr.ErrInvalidSpawnKey
+	}
+
+	switch rr.Cmd.Kind {
+	case api.CmdRun:
+		if rr.Cmd.Run == nil || strings.TrimSpace(rr.Cmd.Run.RunID) == "" {
+			return sErr.ErrInvalidCommand
+		}
+	case api.CmdCancel:
+		if rr.Cmd.Cancel == nil {
+			return sErr.ErrInvalidCommand
+		}
+	case api.CmdSignal:
+		if rr.Cmd.Signal == nil || strings.TrimSpace(rr.Cmd.Signal.RunID) == "" {
+			return sErr.ErrInvalidCommand
+		}
+	case api.CmdBind:
+		if rr.Cmd.Bind == nil || strings.TrimSpace(rr.Cmd.Bind.SpawnKey) == "" {
+			return sErr.ErrInvalidCommand
+		}
+	case api.CmdUnbind:
+		if rr.Cmd.Unbind == nil {
+			return sErr.ErrInvalidCommand
+		}
+	}
+
+	return nil
+}
+
 // Handle Resolve → (없으면) 세마확보 → Bind → Register → CmdBind → Enqueue
 // 이미 바운드된 경우엔 세마 재획득/바인드 불필요, 바로 Enqueue.
 //
@@ -144,31 +178,12 @@ func runIDFromInput(in frontdoor.ResolveInput) string {
 //  3. 디스패치 성공 시 queued→admitted-to-dag 전이.
 //  4. ErrSaturated 시 run은 queued 상태 그대로 유지 (자연 재시도 가능).
 func (d *Dispatcher) Handle(ctx context.Context, in frontdoor.ResolveInput, sink api.EventSink) error {
-	// ── ingress gate: RunStore 경계 ────────────────────────────────────────────
-	runID := runIDFromInput(in)
-	if d.runStore != nil && runID != "" {
-		payload, _ := json.Marshal(in.Req) // best-effort; nil on non-RunSpec
-		enqErr := d.runStore.Enqueue(ctx, store.RunRecord{
-			RunID:   runID,
-			State:   store.StateQueued,
-			Payload: payload,
-		})
-		if enqErr != nil && !errors.Is(enqErr, store.ErrAlreadyExists) {
-			return enqErr
-		}
-
-		// K8s 불가: queued → held, 디스패치 건너뜀
-		if !d.k8sAvailable {
-			_ = d.runStore.UpdateState(ctx, runID, store.StateQueued, store.StateHeld)
-			log.Printf("[ingress] k8s unavailable: run %s → held", runID)
-			return sErr.ErrK8sUnavailable
-		}
-	}
-	// ──────────────────────────────────────────────────────────────────────────
-
 	// 0) 라우팅
 	rr, err := d.FD.Resolve(ctx, in)
 	if err != nil {
+		return err
+	}
+	if err := validateResolvedCommand(rr); err != nil {
 		return err
 	}
 
@@ -181,6 +196,27 @@ func (d *Dispatcher) Handle(ctx context.Context, in frontdoor.ResolveInput, sink
 			s = NoopSink{}
 		}
 	}
+
+	// ── ingress gate: RunStore 경계 ────────────────────────────────────────────
+	runID := runIDFromInput(in)
+	if rr.Cmd.Kind == api.CmdRun && d.runStore != nil && runID != "" {
+		payload, _ := json.Marshal(in.Req) // best-effort; nil on non-RunSpec
+		enqErr := d.runStore.Enqueue(ctx, store.RunRecord{
+			RunID:   runID,
+			State:   store.StateQueued,
+			Payload: payload,
+		})
+		if enqErr != nil && !errors.Is(enqErr, store.ErrAlreadyExists) {
+			return enqErr
+		}
+
+		if !d.k8sAvailable {
+			_ = d.runStore.UpdateState(ctx, runID, store.StateQueued, store.StateHeld)
+			log.Printf("[ingress] k8s unavailable: run %s → held", runID)
+			return sErr.ErrK8sUnavailable
+		}
+	}
+	// ──────────────────────────────────────────────────────────────────────────
 
 	// 2) 바운드 조회
 	act, ok := d.AF.Get(rr.SpawnKey)
@@ -202,6 +238,9 @@ func (d *Dispatcher) Handle(ctx context.Context, in frontdoor.ResolveInput, sink
 				if base == nil {
 					base = ctx
 				}
+				releaseOnce := syncRelease(d.Sem, d.AF, rr.SpawnKey, act)
+				act.OnIdle(releaseOnce)
+				act.OnTerminate(releaseOnce)
 				go act.Loop(base)
 			}
 
@@ -249,7 +288,7 @@ func (d *Dispatcher) Handle(ctx context.Context, in frontdoor.ResolveInput, sink
 	}
 
 	// ── admitted: queued → admitted-to-dag ────────────────────────────────────
-	if d.runStore != nil && runID != "" {
+	if rr.Cmd.Kind == api.CmdRun && d.runStore != nil && runID != "" {
 		if err := d.runStore.UpdateState(ctx, runID, store.StateQueued, store.StateAdmittedToDag); err != nil {
 			// Log but don't fail: run is already dispatched.
 			// ErrAlreadyExists-equivalent: run was re-submitted and already advanced.
@@ -259,4 +298,17 @@ func (d *Dispatcher) Handle(ctx context.Context, in frontdoor.ResolveInput, sink
 	// ──────────────────────────────────────────────────────────────────────────
 
 	return nil
+}
+
+func syncRelease(sem chan struct{}, af fac.Factory, spawnKey string, act actor.Actor) func() {
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			af.Unbind(spawnKey, act)
+			select {
+			case <-sem:
+			default:
+			}
+		})
+	}
 }

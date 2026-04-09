@@ -70,15 +70,15 @@ The repository now includes direct tests for:
 
 Coverage snapshot:
 
-- Overall statement coverage: `71.1%`
-- `cmd/imp`: `72.1%`
+- Overall statement coverage: `71.6%`
+- `cmd/imp`: `71.7%`
 - `cmd/server`: `29.5%`
 - `pkg/actor`: `86.8%`
-- `pkg/dispatcher`: `73.3%`
+- `pkg/dispatcher`: `71.9%`
 - `pkg/driver`: `100.0%`
 - `pkg/store`: `74.8%`
 - `pkg/factory`: `96.8%`
-- `pkg/frontdoor`: `76.3%`
+- `pkg/frontdoor`: `85.5%`
 
 These numbers are intentionally documented as a moving baseline, not as a completion claim.
 The weakest areas are still the server entrypoint, actor lifecycle edge cases, and live K8s integration paths.
