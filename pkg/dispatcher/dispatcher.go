@@ -28,9 +28,9 @@ type Dispatcher struct {
 	loopBaseCtx    context.Context // (옵션) 액터 루프 베이스 컨텍스트
 	enqueueTimeout time.Duration   // (옵션) EnqueueCtx 타임아웃
 	// ingress boundary
-	runStore      store.RunStore // nil = skip RunStore (backward-compat)
-	k8sAvailable  bool           // false = K8s unreachable; runs held, not dispatched
-	attemptPolicy ply.AttemptPolicy
+	runStore         store.RunStore // nil = skip RunStore (backward-compat)
+	backendAvailable bool           // false = backend unreachable; runs held, not dispatched
+	attemptPolicy    ply.AttemptPolicy
 }
 
 type RecoverableRun struct {
@@ -77,11 +77,11 @@ func New(fd frontdoor.FrontDoor, af fac.Factory, maxActors int) *Dispatcher {
 
 func NewDispatcher(fd frontdoor.FrontDoor, af fac.Factory, semSize int, opts ...Option) *Dispatcher {
 	d := &Dispatcher{
-		FD:            fd,
-		AF:            af,
-		Sem:           make(chan struct{}, semSize),
-		k8sAvailable:  true, // assume available unless WithK8sUnavailable is set
-		attemptPolicy: ply.DefaultAttemptPolicy(),
+		FD:               fd,
+		AF:               af,
+		Sem:              make(chan struct{}, semSize),
+		backendAvailable: true, // assume available unless WithBackendUnavailable is set
+		attemptPolicy:    ply.DefaultAttemptPolicy(),
 	}
 	for _, o := range opts {
 		o(d)
@@ -115,20 +115,20 @@ func WithRunStore(s store.RunStore) Option {
 	return func(d *Dispatcher) { d.runStore = s }
 }
 
-// WithK8sUnavailable marks K8s as unreachable at startup.
+// WithBackendUnavailable marks the execution backend as unreachable at startup.
 // Handle() will transition queued runs to StateHeld instead of dispatching
-// to the Actor, preventing K8s API calls to an unavailable cluster.
-// ASSUMPTION: a health-check loop (not implemented here) calls SetK8sAvailable
+// to the Actor, preventing API calls to an unavailable backend.
+// ASSUMPTION: a health-check loop (not implemented here) calls SetBackendAvailable
 // once connectivity is restored.
-func WithK8sUnavailable() Option {
-	return func(d *Dispatcher) { d.k8sAvailable = false }
+func WithBackendUnavailable() Option {
+	return func(d *Dispatcher) { d.backendAvailable = false }
 }
 
-// SetK8sAvailable toggles K8s availability at runtime.
+// SetBackendAvailable toggles backend availability at runtime.
 // When availability transitions false→true, call Bootstrap() to re-queue
 // held runs.
-func (d *Dispatcher) SetK8sAvailable(available bool) {
-	d.k8sAvailable = available
+func (d *Dispatcher) SetBackendAvailable(available bool) {
+	d.backendAvailable = available
 }
 
 // Bootstrap scans the RunStore for runs in StateQueued and StateAdmittedToDag
@@ -373,7 +373,7 @@ func validateResolvedCommand(rr frontdoor.ResolveResult) error {
 //
 // RunStore 경계 (runStore != nil 일 때):
 //  1. Handle() 진입 시 run을 StateQueued로 Enqueue (idempotent).
-//  2. K8s 불가 상태(k8sAvailable=false)이면 queued→held 전이 후 ErrK8sUnavailable 반환.
+//  2. backend 불가 상태(backendAvailable=false)이면 queued→held 전이 후 ErrBackendUnavailable 반환.
 //     run은 RunStore에 held 상태로 보존된다 — panic 없음.
 //  3. 디스패치 성공 시 queued→admitted-to-dag 전이.
 //  4. ErrSaturated 시 run은 queued 상태 그대로 유지 (자연 재시도 가능).
@@ -434,10 +434,10 @@ func (d *Dispatcher) Handle(ctx context.Context, in frontdoor.ResolveInput, sink
 			}
 		}
 
-		if !d.k8sAvailable {
+		if !d.backendAvailable {
 			_ = d.runStore.UpdateState(ctx, logicalRunID, store.StateQueued, store.StateHeld)
-			log.Printf("[ingress] k8s unavailable: run %s → held", logicalRunID)
-			return sErr.ErrK8sUnavailable
+			log.Printf("[ingress] backend unavailable: run %s → held", logicalRunID)
+			return sErr.ErrBackendUnavailable
 		}
 	}
 	// ──────────────────────────────────────────────────────────────────────────

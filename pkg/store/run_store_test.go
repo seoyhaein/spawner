@@ -121,14 +121,14 @@ func TestMemoryStore_DoesNotSurviveReset(t *testing.T) {
 	t.Logf("OBSERVATION: InMemoryRunStore lost 2 queued runs on reset")
 }
 
-// TestMemoryStore_HeldOnK8sUnavailable proves the queued→held transition:
-// when K8s is unavailable, runs transition to held instead of being dispatched.
-func TestMemoryStore_HeldOnK8sUnavailable(t *testing.T) {
+// TestMemoryStore_HeldOnBackendUnavailable proves the queued→held transition:
+// when the backend is unavailable, runs transition to held instead of being dispatched.
+func TestMemoryStore_HeldOnBackendUnavailable(t *testing.T) {
 	ctx := context.Background()
 	s := store.NewInMemoryRunStore()
 	_ = s.Enqueue(ctx, store.RunRecord{RunID: "run-1", State: store.StateQueued})
 
-	// Simulate k8s unavailable: transition queued → held
+	// Simulate backend unavailable: transition queued → held
 	if err := s.UpdateState(ctx, "run-1", store.StateQueued, store.StateHeld); err != nil {
 		t.Fatalf("queued→held rejected: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestMemoryStore_HeldOnK8sUnavailable(t *testing.T) {
 	if !ok || rec.State != store.StateHeld {
 		t.Fatalf("expected held, got %v", rec.State)
 	}
-	t.Logf("PASS: run stays held when k8s unavailable (not lost, not admitted)")
+	t.Logf("PASS: run stays held when backend unavailable (not lost, not admitted)")
 }
 
 // TestMemoryStore_StateTransition proves UpdateState enforces state machine policy.

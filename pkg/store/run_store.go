@@ -22,7 +22,7 @@ type RunState string
 const (
 	// StateQueued: received from user, waiting for admission.
 	StateQueued RunState = "queued"
-	// StateHeld: explicitly paused (K8s unavailable, rate-limit, manual hold).
+	// StateHeld: explicitly paused (backend unavailable, rate-limit, manual hold).
 	StateHeld RunState = "held"
 	// StateResumed: hold lifted, waiting for re-admission.
 	StateResumed RunState = "resumed"

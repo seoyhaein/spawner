@@ -86,12 +86,13 @@ func main() {
 	}
 	log.Printf("[server] RunStore: %s", storePath)
 
-	// ── K8s driver: graceful init — no panic on failure ───────────────────────
-	// If K8s is unreachable, NopDriver is used and Dispatcher marks k8sAvailable=false.
+	// ── Execution backend init: graceful init — no panic on failure ───────────
+	// If the backend is unreachable, NopDriver is used and Dispatcher marks
+	// backendAvailable=false.
 	// Incoming runs are held in the RunStore rather than dispatched to Actor.
-	// No K8s API call is attempted against an unavailable cluster.
+	// No execution API call is attempted against an unavailable backend.
 	//
-	// ASSUMPTION: a health-check loop (not shown here) calls d.SetK8sAvailable(true)
+	// ASSUMPTION: a health-check loop (not shown here) calls d.SetBackendAvailable(true)
 	// and d.Bootstrap() once connectivity is restored.
 	var drvFn factory.DriverMaker
 	dispOpts := []dispatcher.Option{
@@ -100,11 +101,11 @@ func main() {
 
 	drv, k8sErr := imp.NewK8sFromKubeconfig("default", "")
 	if k8sErr != nil {
-		log.Printf("[server] WARN: K8s init failed (%v) — NopDriver active; runs will be held", k8sErr)
+		log.Printf("[server] WARN: backend init failed (%v) — NopDriver active; runs will be held", k8sErr)
 		drvFn = func(_ string) driver.Driver { return &imp.NopDriver{} }
-		dispOpts = append(dispOpts, dispatcher.WithK8sUnavailable())
+		dispOpts = append(dispOpts, dispatcher.WithBackendUnavailable())
 	} else {
-		log.Printf("[server] K8s connected")
+		log.Printf("[server] backend connected")
 		drvFn = func(_ string) driver.Driver { return drv }
 	}
 
@@ -132,8 +133,8 @@ func main() {
 	in := sampleInput()
 
 	if err := d.Handle(rootCtx, in, nil); err != nil {
-		if errors.Is(err, sErr.ErrK8sUnavailable) {
-			log.Printf("[server] run-001 → held (k8s unavailable; preserved in RunStore)")
+		if errors.Is(err, sErr.ErrBackendUnavailable) {
+			log.Printf("[server] run-001 → held (backend unavailable; preserved in RunStore)")
 		} else {
 			log.Printf("[server] Handle error: %v", err)
 		}

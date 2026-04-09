@@ -151,23 +151,23 @@ func TestIngress_TransitionsToAdmittedOnSuccessfulDispatch(t *testing.T) {
 	t.Logf("PASS: run transitioned to admitted-to-dag after successful dispatch")
 }
 
-// TestIngress_RunHeldNotDispatchedWhenK8sUnavailable proves:
-// When K8s is unreachable at startup, Handle() transitions the run to
-// StateHeld and returns ErrK8sUnavailable. No Actor is invoked.
+// TestIngress_RunHeldNotDispatchedWhenBackendUnavailable proves:
+// When the execution backend is unreachable at startup, Handle() transitions the
+// run to StateHeld and returns ErrBackendUnavailable. No Actor is invoked.
 // The run is preserved in the RunStore for recovery, not lost.
-func TestIngress_RunHeldNotDispatchedWhenK8sUnavailable(t *testing.T) {
+func TestIngress_RunHeldNotDispatchedWhenBackendUnavailable(t *testing.T) {
 	ctx := context.Background()
 	rs := store.NewInMemoryRunStore()
-	d, act := newTestDispatcher(rs, dispatcher.WithK8sUnavailable())
+	d, act := newTestDispatcher(rs, dispatcher.WithBackendUnavailable())
 
 	err := d.Handle(ctx, testInput(), nil)
-	if !errors.Is(err, sErr.ErrK8sUnavailable) {
-		t.Fatalf("expected ErrK8sUnavailable, got %v", err)
+	if !errors.Is(err, sErr.ErrBackendUnavailable) {
+		t.Fatalf("expected ErrBackendUnavailable, got %v", err)
 	}
 
 	// Actor must NOT have been invoked
 	if act.enqueueCalled > 0 {
-		t.Fatalf("BOUNDARY VIOLATION: Actor.EnqueueCtx called despite k8s unavailable")
+		t.Fatalf("BOUNDARY VIOLATION: Actor.EnqueueCtx called despite backend unavailable")
 	}
 
 	// Run must be in StateHeld
@@ -178,7 +178,7 @@ func TestIngress_RunHeldNotDispatchedWhenK8sUnavailable(t *testing.T) {
 	if rec.State != store.StateHeld {
 		t.Fatalf("expected held, got %s", rec.State)
 	}
-	t.Logf("PASS: run held (not lost, not dispatched) when k8s unavailable")
+	t.Logf("PASS: run held (not lost, not dispatched) when backend unavailable")
 }
 
 // TestIngress_BootstrapRecoversByState proves:
