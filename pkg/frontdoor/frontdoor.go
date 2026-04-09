@@ -16,6 +16,11 @@ type ResolveInput struct {
 	Meta MetaContext
 }
 
+func (in ResolveInput) Clone() ResolveInput {
+	in.Meta = in.Meta.Clone()
+	return in
+}
+
 type ResolveResult struct {
 	SpawnKey string
 	Cmd      api.Command
@@ -36,6 +41,7 @@ func NewTableFrontDoor(rules ...Rule) *TableFrontDoor {
 // Resolve TODO 적용 규칙에 대해서는 생각해줘야 함.
 
 func (fd *TableFrontDoor) Resolve(ctx context.Context, in ResolveInput) (ResolveResult, error) {
+	in = in.Clone()
 	for _, rl := range fd.rules {
 		if rl.Match(in) {
 			cmd, err := rl.BuildCmd(in)
