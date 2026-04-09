@@ -124,6 +124,23 @@ type Resources struct {
 	Memory string
 }
 
+type RunIdentity struct {
+	LogicalRunID string
+	AttemptID    string
+	SpawnKey     string
+	TenantID     string
+	TraceID      string
+	RequestID    string
+	Principal    string
+}
+
+type RunEnvelope struct {
+	Version  int
+	Kind     CmdKind
+	Identity RunIdentity
+	Run      *RunSpec
+}
+
 type Signal struct {
 	RunID string
 	Name  string

@@ -70,12 +70,12 @@ The repository now includes direct tests for:
 
 Coverage snapshot:
 
-- Overall statement coverage: `72.9%`
+- Overall statement coverage: `72.8%`
 - `cmd/imp`: `71.4%`
 - `cmd/server`: `29.5%`
 - `pkg/actor`: `89.5%`
 - `pkg/api`: `93.5%`
-- `pkg/dispatcher`: `75.4%`
+- `pkg/dispatcher`: `74.6%`
 - `pkg/driver`: `100.0%`
 - `pkg/store`: `74.8%`
 - `pkg/factory`: `96.8%`

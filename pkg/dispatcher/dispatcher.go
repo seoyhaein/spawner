@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -124,17 +125,52 @@ func (d *Dispatcher) Bootstrap(ctx context.Context) ([]store.RunRecord, error) {
 	return all, nil
 }
 
-// runIDFromInput extracts a stable run identifier from the ResolveInput.
-// Primary source: RunSpec.RunID prefixed with TenantID.
-// Fallback: TraceID. If neither is available, returns "".
-func runIDFromInput(in frontdoor.ResolveInput) string {
+// logicalRunIDFromInput extracts the stable logical run identifier.
+// For runnable inputs, this should be derived from tenant + run spec identity,
+// not from transport-scoped ids such as trace ids.
+func logicalRunIDFromInput(in frontdoor.ResolveInput) string {
 	if rs, ok := in.Req.(*api.RunSpec); ok && rs.RunID != "" {
 		if in.Meta.TenantID != "" {
 			return in.Meta.TenantID + ":" + rs.RunID
 		}
 		return rs.RunID
 	}
-	return in.Meta.TraceID
+	return ""
+}
+
+func initialAttemptID(logicalRunID string) string {
+	if logicalRunID == "" {
+		return ""
+	}
+	return logicalRunID + "/attempt-1"
+}
+
+func buildRunEnvelope(in frontdoor.ResolveInput, rr frontdoor.ResolveResult) (api.RunEnvelope, error) {
+	rs, ok := in.Req.(*api.RunSpec)
+	if !ok || rs == nil {
+		return api.RunEnvelope{}, sErr.ErrInvalidCommand
+	}
+
+	logicalRunID := logicalRunIDFromInput(in)
+	if logicalRunID == "" {
+		return api.RunEnvelope{}, fmt.Errorf("%w: missing logical run id", sErr.ErrInvalidCommand)
+	}
+
+	env := api.RunEnvelope{
+		Version: 1,
+		Kind:    api.CmdRun,
+		Identity: api.RunIdentity{
+			LogicalRunID: logicalRunID,
+			AttemptID:    initialAttemptID(logicalRunID),
+			SpawnKey:     rr.SpawnKey,
+			TenantID:     in.Meta.TenantID,
+			TraceID:      in.Meta.TraceID,
+			RequestID:    in.Meta.RequestID,
+			Principal:    in.Meta.Principal,
+		},
+		Run: rs,
+	}
+	return env, nil
 }
 
 func validateResolvedCommand(rr frontdoor.ResolveResult) error {
@@ -174,11 +210,18 @@ func (d *Dispatcher) Handle(ctx context.Context, in frontdoor.ResolveInput, sink
 	}
 
 	// ── ingress gate: RunStore 경계 ────────────────────────────────────────────
-	runID := runIDFromInput(in)
-	if rr.Cmd.Kind == api.CmdRun && d.runStore != nil && runID != "" {
-		payload, _ := json.Marshal(in.Req) // best-effort; nil on non-RunSpec
+	logicalRunID := logicalRunIDFromInput(in)
+	if rr.Cmd.Kind == api.CmdRun && d.runStore != nil && logicalRunID != "" {
+		env, err := buildRunEnvelope(in, rr)
+		if err != nil {
+			return err
+		}
+		payload, err := json.Marshal(env)
+		if err != nil {
+			return err
+		}
 		enqErr := d.runStore.Enqueue(ctx, store.RunRecord{
-			RunID:   runID,
+			RunID:   logicalRunID,
 			State:   store.StateQueued,
 			Payload: payload,
 		})
@@ -187,8 +230,8 @@ func (d *Dispatcher) Handle(ctx context.Context, in frontdoor.ResolveInput, sink
 		}
 
 		if !d.k8sAvailable {
-			_ = d.runStore.UpdateState(ctx, runID, store.StateQueued, store.StateHeld)
-			log.Printf("[ingress] k8s unavailable: run %s → held", runID)
+			_ = d.runStore.UpdateState(ctx, logicalRunID, store.StateQueued, store.StateHeld)
+			log.Printf("[ingress] k8s unavailable: run %s → held", logicalRunID)
 			return sErr.ErrK8sUnavailable
 		}
 	}
@@ -266,8 +309,8 @@ func (d *Dispatcher) Handle(ctx context.Context, in frontdoor.ResolveInput, sink
 	}
 
 	// ── admitted: queued → admitted-to-dag ────────────────────────────────────
-	if rr.Cmd.Kind == api.CmdRun && d.runStore != nil && runID != "" {
-		if err := d.runStore.UpdateState(ctx, runID, store.StateQueued, store.StateAdmittedToDag); err != nil {
+	if rr.Cmd.Kind == api.CmdRun && d.runStore != nil && logicalRunID != "" {
+		if err := d.runStore.UpdateState(ctx, logicalRunID, store.StateQueued, store.StateAdmittedToDag); err != nil {
 			// Log but don't fail: run is already dispatched.
 			// ErrAlreadyExists-equivalent: run was re-submitted and already advanced.
 			log.Printf("[ingress] warn: UpdateState admitted: %v", err)

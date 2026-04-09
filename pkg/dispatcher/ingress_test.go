@@ -2,6 +2,7 @@ package dispatcher_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -88,6 +89,25 @@ func TestIngress_EnqueuesRunAsQueuedBeforeDispatching(t *testing.T) {
 	rec, ok, _ := rs.Get(ctx, "teamA:run-001")
 	if !ok {
 		t.Fatal("run was not persisted to RunStore")
+	}
+	var env api.RunEnvelope
+	if err := json.Unmarshal(rec.Payload, &env); err != nil {
+		t.Fatalf("unmarshal payload envelope: %v", err)
+	}
+	if env.Version != 1 {
+		t.Fatalf("expected envelope version 1, got %d", env.Version)
+	}
+	if env.Identity.LogicalRunID != "teamA:run-001" {
+		t.Fatalf("unexpected logical run id: %q", env.Identity.LogicalRunID)
+	}
+	if env.Identity.AttemptID != "teamA:run-001/attempt-1" {
+		t.Fatalf("unexpected attempt id: %q", env.Identity.AttemptID)
+	}
+	if env.Identity.SpawnKey != "teamA:run-001" {
+		t.Fatalf("unexpected spawn key: %q", env.Identity.SpawnKey)
+	}
+	if env.Run == nil || env.Run.RunID != "run-001" {
+		t.Fatalf("expected run payload in envelope, got %+v", env.Run)
 	}
 	t.Logf("PASS: run persisted with state=%s before/during dispatch", rec.State)
 }

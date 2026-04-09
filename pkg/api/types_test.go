@@ -75,3 +75,25 @@ func TestCommandValidateRejectsInvalidPayloads(t *testing.T) {
 		}
 	}
 }
+
+func TestRunEnvelope_PreservesIdentityFields(t *testing.T) {
+	env := api.RunEnvelope{
+		Version: 1,
+		Kind:    api.CmdRun,
+		Identity: api.RunIdentity{
+			LogicalRunID: "teamA:run-1",
+			AttemptID:    "teamA:run-1/attempt-1",
+			SpawnKey:     "teamA:run-1",
+			TenantID:     "teamA",
+			TraceID:      "trace-1",
+		},
+		Run: &api.RunSpec{RunID: "run-1", ImageRef: "busybox:1.36"},
+	}
+
+	if env.Identity.LogicalRunID == env.Identity.AttemptID {
+		t.Fatal("logical run id and attempt id must remain distinct")
+	}
+	if env.Run == nil || env.Run.RunID != "run-1" {
+		t.Fatalf("expected run payload to be preserved, got %+v", env.Run)
+	}
+}
