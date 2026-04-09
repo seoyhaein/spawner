@@ -340,6 +340,42 @@ func TestIngress_ReplayRecoverableRunWithPhase_ManualRequeueAllocatesNewAttempt(
 	}
 }
 
+func TestIngress_ReplayRecoverableRunWithPhase_ManualRequeueAppendsAttemptHistory(t *testing.T) {
+	ctx := context.Background()
+	rs := store.NewInMemoryRunStore()
+	rec := recoveryRecord(t, "teamA:run-1", store.StateQueued)
+	if err := rs.Enqueue(ctx, rec); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	act := &mockActor{}
+	d := dispatcher.NewDispatcher(
+		replayFD{},
+		&mockFactory{act: act},
+		4,
+		dispatcher.WithRunStore(rs),
+		dispatcher.WithAttemptPolicy(policy.DefaultAttemptPolicy()),
+	)
+	recovered, err := d.RecoverableRuns(ctx)
+	if err != nil {
+		t.Fatalf("RecoverableRuns: %v", err)
+	}
+	if err := d.ReplayRecoverableRunWithPhase(ctx, recovered[0], policy.AttemptPhaseManualRequeue, nil); err != nil {
+		t.Fatalf("ReplayRecoverableRunWithPhase: %v", err)
+	}
+
+	atts, err := rs.ListAttempts(ctx, "teamA:run-1")
+	if err != nil {
+		t.Fatalf("ListAttempts: %v", err)
+	}
+	if len(atts) != 2 {
+		t.Fatalf("expected 2 attempts after manual requeue, got %d", len(atts))
+	}
+	if atts[1].AttemptID != "teamA:run-1/attempt-2" {
+		t.Fatalf("expected appended attempt-2, got %q", atts[1].AttemptID)
+	}
+}
+
 func TestIngress_PrepareReplayInput_RecoveryKeepsAttempt(t *testing.T) {
 	d, _ := newTestDispatcher(nil, dispatcher.WithAttemptPolicy(policy.DefaultAttemptPolicy()))
 	rr := dispatcher.RecoverableRun{

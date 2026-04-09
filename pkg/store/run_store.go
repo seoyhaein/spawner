@@ -56,9 +56,20 @@ var (
 
 // RunRecord is the persisted representation of a submitted DAG run.
 type RunRecord struct {
+	RunID           string
+	State           RunState
+	Payload         []byte // latest serialized run envelope; kept for compatibility
+	LatestAttemptID string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+type AttemptRecord struct {
+	AttemptID string
 	RunID     string
 	State     RunState
-	Payload   []byte // serialized RunSpec; opaque to RunStore
+	Payload   []byte
+	Reason    string
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -71,6 +82,9 @@ type RunStore interface {
 	Get(ctx context.Context, runID string) (RunRecord, bool, error)
 	UpdateState(ctx context.Context, runID string, from, to RunState) error
 	ListByState(ctx context.Context, state RunState) ([]RunRecord, error)
+	AppendAttempt(ctx context.Context, attempt AttemptRecord) error
+	ListAttempts(ctx context.Context, runID string) ([]AttemptRecord, error)
+	GetLatestAttempt(ctx context.Context, runID string) (AttemptRecord, bool, error)
 	Delete(ctx context.Context, runID string) error
 }
 

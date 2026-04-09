@@ -384,8 +384,25 @@ func (d *Dispatcher) Handle(ctx context.Context, in frontdoor.ResolveInput, sink
 			State:   store.StateQueued,
 			Payload: payload,
 		})
-		if enqErr != nil && !errors.Is(enqErr, store.ErrAlreadyExists) {
-			return enqErr
+		if enqErr != nil {
+			if !errors.Is(enqErr, store.ErrAlreadyExists) {
+				return enqErr
+			}
+			latest, ok, err := d.runStore.GetLatestAttempt(ctx, logicalRunID)
+			if err != nil {
+				return err
+			}
+			if !ok || latest.AttemptID != env.Identity.AttemptID {
+				if err := d.runStore.AppendAttempt(ctx, store.AttemptRecord{
+					AttemptID: env.Identity.AttemptID,
+					RunID:     logicalRunID,
+					State:     store.StateQueued,
+					Payload:   payload,
+					Reason:    "replay-or-requeue",
+				}); err != nil {
+					return err
+				}
+			}
 		}
 
 		if !d.k8sAvailable {

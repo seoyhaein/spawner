@@ -168,6 +168,45 @@ func TestMemoryStore_ListByStateAndDelete(t *testing.T) {
 	}
 }
 
+func TestMemoryStore_AttemptHistory(t *testing.T) {
+	ctx := context.Background()
+	s := store.NewInMemoryRunStore()
+	if err := s.Enqueue(ctx, store.RunRecord{
+		RunID:           "run-1",
+		State:           store.StateQueued,
+		Payload:         []byte("first"),
+		LatestAttemptID: "run-1/attempt-1",
+	}); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	if err := s.AppendAttempt(ctx, store.AttemptRecord{
+		AttemptID: "run-1/attempt-2",
+		RunID:     "run-1",
+		State:     store.StateQueued,
+		Payload:   []byte("second"),
+		Reason:    "manual-requeue",
+	}); err != nil {
+		t.Fatalf("AppendAttempt: %v", err)
+	}
+
+	latest, ok, err := s.GetLatestAttempt(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("GetLatestAttempt: %v", err)
+	}
+	if !ok || latest.AttemptID != "run-1/attempt-2" {
+		t.Fatalf("expected latest attempt-2, got %+v", latest)
+	}
+
+	atts, err := s.ListAttempts(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("ListAttempts: %v", err)
+	}
+	if len(atts) != 2 {
+		t.Fatalf("expected 2 attempts, got %d", len(atts))
+	}
+}
+
 // ── JsonRunStore ──────────────────────────────────────────────────────────────
 
 // TestJsonStore_RecoveryAfterRestart proves that JsonRunStore survives
@@ -195,6 +234,57 @@ func TestJsonStore_RecoveryAfterRestart(t *testing.T) {
 	if len(admitted) != 1 {
 		t.Fatalf("expected 1 admitted after restart, got %d", len(admitted))
 	}
+	atts, err := s2.ListAttempts(ctx, "run-A")
+	if err != nil {
+		t.Fatalf("ListAttempts after restart: %v", err)
+	}
+	if len(atts) != 1 {
+		t.Fatalf("expected 1 attempt after restart, got %d", len(atts))
+	}
 	t.Logf("OBSERVATION: JsonRunStore recovered %d queued + %d admitted after restart",
 		len(queued), len(admitted))
+}
+
+func TestJsonStore_AttemptHistoryAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	f, _ := os.CreateTemp(t.TempDir(), "runstore-*.json")
+	path := f.Name()
+	if err := f.Close(); err != nil {
+		t.Fatalf("close temp file: %v", err)
+	}
+
+	s1, _ := store.NewJsonRunStore(path)
+	if err := s1.Enqueue(ctx, store.RunRecord{
+		RunID:           "run-1",
+		State:           store.StateQueued,
+		Payload:         []byte("first"),
+		LatestAttemptID: "run-1/attempt-1",
+	}); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if err := s1.AppendAttempt(ctx, store.AttemptRecord{
+		AttemptID: "run-1/attempt-2",
+		RunID:     "run-1",
+		State:     store.StateQueued,
+		Payload:   []byte("second"),
+		Reason:    "manual-requeue",
+	}); err != nil {
+		t.Fatalf("AppendAttempt: %v", err)
+	}
+
+	s2, _ := store.NewJsonRunStore(path)
+	atts, err := s2.ListAttempts(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("ListAttempts: %v", err)
+	}
+	if len(atts) != 2 {
+		t.Fatalf("expected 2 attempts after restart, got %d", len(atts))
+	}
+	latest, ok, err := s2.GetLatestAttempt(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("GetLatestAttempt: %v", err)
+	}
+	if !ok || latest.AttemptID != "run-1/attempt-2" {
+		t.Fatalf("expected latest attempt-2 after restart, got %+v", latest)
+	}
 }
