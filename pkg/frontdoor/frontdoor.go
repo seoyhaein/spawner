@@ -4,11 +4,9 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/seoyhaein/spawner/pkg/api"
 	sErr "github.com/seoyhaein/spawner/pkg/error"
-	ply "github.com/seoyhaein/spawner/pkg/policy"
 )
 
 type ResolveInput struct {
@@ -52,8 +50,9 @@ func (fd *TableFrontDoor) Resolve(ctx context.Context, in ResolveInput) (Resolve
 			if spawnKey == "" {
 				return ResolveResult{}, fmt.Errorf("%w: rpc=%s", sErr.ErrInvalidSpawnKey, in.Meta.RPC)
 			}
-			if cmd.Policy.Timeout == 0 {
-				cmd.Policy = ply.DefaultPolicyB(30 * time.Minute) // TODO cmd 에 넣은 것은 생각을 해주자.
+			cmd.Policy = cmd.Policy.WithDefaults()
+			if err := cmd.Policy.Validate(); err != nil {
+				return ResolveResult{}, err
 			}
 			return ResolveResult{
 				SpawnKey: spawnKey,

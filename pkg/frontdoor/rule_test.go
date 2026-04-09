@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/seoyhaein/spawner/pkg/api"
 	sErr "github.com/seoyhaein/spawner/pkg/error"
 	"github.com/seoyhaein/spawner/pkg/frontdoor"
+	"github.com/seoyhaein/spawner/pkg/policy"
 )
 
 func TestPredicates_ComposeAsExpected(t *testing.T) {
@@ -91,5 +93,28 @@ func TestTableFrontDoor_RejectsEmptySpawnKey(t *testing.T) {
 	})
 	if !errors.Is(err, sErr.ErrInvalidSpawnKey) {
 		t.Fatalf("expected ErrInvalidSpawnKey, got %v", err)
+	}
+}
+
+func TestTableFrontDoor_RejectsInvalidPolicy(t *testing.T) {
+	fd := frontdoor.NewTableFrontDoor(frontdoor.Rule{
+		Match:      func(frontdoor.ResolveInput) bool { return true },
+		SpawnKeyFn: func(frontdoor.ResolveInput) string { return "team-a:run-1" },
+		BuildCmd: func(in frontdoor.ResolveInput) (api.Command, error) {
+			cmd, err := api.NewRunCommand(&api.RunSpec{RunID: "run-1", ImageRef: "busybox:1.36"}, policy.DefaultPolicyB(30*time.Second))
+			if err != nil {
+				return api.Command{}, err
+			}
+			cmd.Policy.Retry.JitterPct = 101
+			return cmd, nil
+		},
+	})
+
+	_, err := fd.Resolve(context.Background(), frontdoor.ResolveInput{
+		Req:  &api.RunSpec{RunID: "run-1", ImageRef: "busybox:1.36"},
+		Meta: frontdoor.MetaContext{RPC: "RunE"},
+	})
+	if !errors.Is(err, policy.ErrInvalidPolicy) {
+		t.Fatalf("expected invalid policy error, got %v", err)
 	}
 }
