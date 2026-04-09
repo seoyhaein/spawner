@@ -89,3 +89,12 @@ func ValidateTransition(from, to RunState) error {
 func IsTerminal(s RunState) bool {
 	return s == StateFinished || s == StateCanceled
 }
+
+// IsRecoverable reports whether a persisted run state should be considered a
+// replay candidate after a service restart.
+//
+// Fast-fail policy is preserved here: terminal failures are not retried by
+// recovery, and explicitly held runs remain an operator/policy decision.
+func IsRecoverable(s RunState) bool {
+	return s == StateQueued || s == StateAdmittedToDag
+}

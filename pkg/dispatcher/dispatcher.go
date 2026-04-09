@@ -31,6 +31,11 @@ type Dispatcher struct {
 	k8sAvailable bool           // false = K8s unreachable; runs held, not dispatched
 }
 
+type RecoverableRun struct {
+	Record   store.RunRecord
+	Envelope api.RunEnvelope
+}
+
 // New is deprecated. Use NewDispatcher with options instead.
 func New(fd frontdoor.FrontDoor, af fac.Factory, maxActors int) *Dispatcher {
 	return &Dispatcher{
@@ -103,6 +108,22 @@ func (d *Dispatcher) SetK8sAvailable(available bool) {
 // This implementation logs and returns the records; re-dispatch is the caller's
 // responsibility.
 func (d *Dispatcher) Bootstrap(ctx context.Context) ([]store.RunRecord, error) {
+	recoverable, err := d.RecoverableRuns(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]store.RunRecord, 0, len(recoverable))
+	for _, r := range recoverable {
+		out = append(out, r.Record)
+	}
+	return out, nil
+}
+
+// RecoverableRuns returns restart-time replay candidates with decoded
+// envelopes. This is intentionally narrower than "all stored runs":
+// fast-fail policy means terminal failures are not retried automatically, and
+// held runs remain an explicit operator or availability decision.
+func (d *Dispatcher) RecoverableRuns(ctx context.Context) ([]RecoverableRun, error) {
 	if d.runStore == nil {
 		return nil, nil
 	}
@@ -115,14 +136,23 @@ func (d *Dispatcher) Bootstrap(ctx context.Context) ([]store.RunRecord, error) {
 		return nil, err
 	}
 	all := append(queued, admitted...)
+	out := make([]RecoverableRun, 0, len(all))
 	for _, r := range all {
+		env, err := decodeRunEnvelope(r)
+		if err != nil {
+			return nil, err
+		}
+		if !store.IsRecoverable(r.State) {
+			continue
+		}
 		log.Printf("[bootstrap] recovered run: id=%s state=%s created=%s",
 			r.RunID, r.State, r.CreatedAt.Format(time.RFC3339))
+		out = append(out, RecoverableRun{Record: r, Envelope: env})
 	}
-	if len(all) == 0 {
+	if len(out) == 0 {
 		log.Printf("[bootstrap] no pending runs to recover")
 	}
-	return all, nil
+	return out, nil
 }
 
 // logicalRunIDFromInput extracts the stable logical run identifier.
@@ -169,6 +199,26 @@ func buildRunEnvelope(in frontdoor.ResolveInput, rr frontdoor.ResolveResult) (ap
 			Principal:    in.Meta.Principal,
 		},
 		Run: rs,
+	}
+	return env, nil
+}
+
+func decodeRunEnvelope(rec store.RunRecord) (api.RunEnvelope, error) {
+	var env api.RunEnvelope
+	if len(rec.Payload) == 0 {
+		return api.RunEnvelope{}, fmt.Errorf("%w: empty run payload for %s", sErr.ErrInvalidCommand, rec.RunID)
+	}
+	if err := json.Unmarshal(rec.Payload, &env); err != nil {
+		return api.RunEnvelope{}, fmt.Errorf("%w: decode run envelope for %s: %v", sErr.ErrInvalidCommand, rec.RunID, err)
+	}
+	if env.Version != 1 || env.Kind != api.CmdRun || env.Run == nil {
+		return api.RunEnvelope{}, fmt.Errorf("%w: malformed run envelope for %s", sErr.ErrInvalidCommand, rec.RunID)
+	}
+	if env.Identity.LogicalRunID != rec.RunID {
+		return api.RunEnvelope{}, fmt.Errorf("%w: run id mismatch for %s", sErr.ErrInvalidCommand, rec.RunID)
+	}
+	if err := env.Run.Validate(); err != nil {
+		return api.RunEnvelope{}, err
 	}
 	return env, nil
 }

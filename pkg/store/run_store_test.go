@@ -64,6 +64,25 @@ func TestIsTerminal(t *testing.T) {
 	}
 }
 
+func TestIsRecoverable(t *testing.T) {
+	cases := []struct {
+		state store.RunState
+		want  bool
+	}{
+		{state: store.StateQueued, want: true},
+		{state: store.StateAdmittedToDag, want: true},
+		{state: store.StateHeld, want: false},
+		{state: store.StateFinished, want: false},
+		{state: store.StateCanceled, want: false},
+	}
+
+	for _, tc := range cases {
+		if got := store.IsRecoverable(tc.state); got != tc.want {
+			t.Fatalf("IsRecoverable(%q) = %v, want %v", tc.state, got, tc.want)
+		}
+	}
+}
+
 // ── InMemoryRunStore ──────────────────────────────────────────────────────────
 
 // TestMemoryStore_DoesNotSurviveReset proves that a new InMemoryRunStore

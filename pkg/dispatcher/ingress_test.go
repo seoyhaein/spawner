@@ -171,11 +171,17 @@ func TestIngress_BootstrapRecoversByState(t *testing.T) {
 	ctx := context.Background()
 	rs := store.NewInMemoryRunStore()
 
-	// Simulate pre-restart state: 2 queued, 1 admitted
-	_ = rs.Enqueue(ctx, store.RunRecord{RunID: "r1", State: store.StateQueued})
-	_ = rs.Enqueue(ctx, store.RunRecord{RunID: "r2", State: store.StateQueued})
-	_ = rs.Enqueue(ctx, store.RunRecord{RunID: "r3", State: store.StateQueued})
-	_ = rs.UpdateState(ctx, "r3", store.StateQueued, store.StateAdmittedToDag)
+	for _, rec := range []store.RunRecord{
+		recoveryRecord(t, "r1", store.StateQueued),
+		recoveryRecord(t, "r2", store.StateQueued),
+		recoveryRecord(t, "r3", store.StateAdmittedToDag),
+		recoveryRecord(t, "r4", store.StateHeld),
+		recoveryRecord(t, "r5", store.StateFinished),
+	} {
+		if err := rs.Enqueue(ctx, rec); err != nil {
+			t.Fatalf("Enqueue(%s): %v", rec.RunID, err)
+		}
+	}
 
 	d, _ := newTestDispatcher(rs)
 	recovered, err := d.Bootstrap(ctx)
@@ -186,6 +192,54 @@ func TestIngress_BootstrapRecoversByState(t *testing.T) {
 		t.Fatalf("expected 3 recovered runs (2 queued + 1 admitted), got %d", len(recovered))
 	}
 	t.Logf("PASS: Bootstrap recovered %d runs (queued + admitted-to-dag)", len(recovered))
+}
+
+func TestIngress_RecoverableRuns_DecodesEnvelopeAndSkipsNonRecoverable(t *testing.T) {
+	ctx := context.Background()
+	rs := store.NewInMemoryRunStore()
+	for _, rec := range []store.RunRecord{
+		recoveryRecord(t, "r1", store.StateQueued),
+		recoveryRecord(t, "r2", store.StateAdmittedToDag),
+		recoveryRecord(t, "r3", store.StateHeld),
+	} {
+		if err := rs.Enqueue(ctx, rec); err != nil {
+			t.Fatalf("Enqueue(%s): %v", rec.RunID, err)
+		}
+	}
+
+	d, _ := newTestDispatcher(rs)
+	recovered, err := d.RecoverableRuns(ctx)
+	if err != nil {
+		t.Fatalf("RecoverableRuns: %v", err)
+	}
+	if len(recovered) != 2 {
+		t.Fatalf("expected 2 recoverable runs, got %d", len(recovered))
+	}
+	for _, rr := range recovered {
+		if !store.IsRecoverable(rr.Record.State) {
+			t.Fatalf("non-recoverable state leaked into result: %s", rr.Record.State)
+		}
+		if rr.Envelope.Identity.LogicalRunID != rr.Record.RunID {
+			t.Fatalf("logical run id mismatch: env=%q record=%q", rr.Envelope.Identity.LogicalRunID, rr.Record.RunID)
+		}
+	}
+}
+
+func TestIngress_RecoverableRuns_FailsOnMalformedEnvelope(t *testing.T) {
+	ctx := context.Background()
+	rs := store.NewInMemoryRunStore()
+	if err := rs.Enqueue(ctx, store.RunRecord{
+		RunID:   "bad-run",
+		State:   store.StateQueued,
+		Payload: []byte("not-json"),
+	}); err != nil {
+		t.Fatalf("Enqueue malformed payload: %v", err)
+	}
+
+	d, _ := newTestDispatcher(rs)
+	if _, err := d.RecoverableRuns(ctx); !errors.Is(err, sErr.ErrInvalidCommand) {
+		t.Fatalf("expected ErrInvalidCommand, got %v", err)
+	}
 }
 
 // TestIngress_BootstrapIsNopWithoutRunStore proves:
@@ -327,4 +381,24 @@ func TestIngress_DoesNotPersistInvalidResolvedRun(t *testing.T) {
 	if _, ok, _ := rs.Get(ctx, "teamA:run-001"); ok {
 		t.Fatal("invalid resolved run should not be persisted to RunStore")
 	}
+}
+
+func recoveryRecord(t *testing.T, logicalRunID string, state store.RunState) store.RunRecord {
+	t.Helper()
+	env := api.RunEnvelope{
+		Version: 1,
+		Kind:    api.CmdRun,
+		Identity: api.RunIdentity{
+			LogicalRunID: logicalRunID,
+			AttemptID:    logicalRunID + "/attempt-1",
+			SpawnKey:     logicalRunID,
+			TenantID:     "teamA",
+		},
+		Run: &api.RunSpec{RunID: logicalRunID, ImageRef: "busybox:1.36"},
+	}
+	payload, err := json.Marshal(env)
+	if err != nil {
+		t.Fatalf("marshal recovery envelope: %v", err)
+	}
+	return store.RunRecord{RunID: logicalRunID, State: state, Payload: payload}
 }

@@ -63,14 +63,14 @@ func sampleInput() fdr.ResolveInput {
 	}
 }
 
-func logBootstrap(recovered []store.RunRecord) {
+func logBootstrap(recovered []dispatcher.RecoverableRun) {
 	if len(recovered) == 0 {
 		return
 	}
 	log.Printf("[server] bootstrap: %d run(s) pending re-dispatch", len(recovered))
-	// ASSUMPTION: re-dispatch requires deserializing RunRecord.Payload into
-	// api.RunSpec and calling d.Handle(). Omitted here; callers are
-	// responsible for this loop in production.
+	// Recovery remains intentionally narrow: only queued or admitted runs with a
+	// valid run envelope are replay candidates. Fast-failed terminal runs are
+	// not auto-retried by bootstrap.
 }
 
 func main() {
@@ -121,7 +121,7 @@ func main() {
 	d := dispatcher.NewDispatcher(r, af, 2, dispOpts...)
 
 	// ── Bootstrap: recover runs from previous process instance ────────────────
-	recovered, bootstrapErr := d.Bootstrap(rootCtx)
+	recovered, bootstrapErr := d.RecoverableRuns(rootCtx)
 	if bootstrapErr != nil {
 		log.Printf("[server] bootstrap error: %v", bootstrapErr)
 	} else {

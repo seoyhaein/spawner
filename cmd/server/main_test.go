@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/seoyhaein/spawner/pkg/api"
-	"github.com/seoyhaein/spawner/pkg/store"
+	"github.com/seoyhaein/spawner/pkg/dispatcher"
 )
 
 func TestRunStorePath_DefaultsToTmp(t *testing.T) {
@@ -83,7 +83,7 @@ func TestLogBootstrap_LogsOnlyWhenRecoveredRunsExist(t *testing.T) {
 		t.Fatalf("expected no log output for empty recovery set, got %q", buf.String())
 	}
 
-	logBootstrap([]store.RunRecord{{RunID: "run-1"}})
+	logBootstrap([]dispatcher.RecoverableRun{{Envelope: api.RunEnvelope{Identity: api.RunIdentity{LogicalRunID: "run-1"}}}})
 	if !strings.Contains(buf.String(), "pending re-dispatch") {
 		t.Fatalf("expected bootstrap log output, got %q", buf.String())
 	}
