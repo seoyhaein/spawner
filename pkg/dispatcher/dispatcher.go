@@ -36,6 +36,19 @@ type RecoverableRun struct {
 	Envelope api.RunEnvelope
 }
 
+func (r RecoverableRun) ResolveInput() frontdoor.ResolveInput {
+	return frontdoor.ResolveInput{
+		Req: r.Envelope.Run,
+		Meta: frontdoor.MetaContext{
+			RPC:       "RunE",
+			TenantID:  r.Envelope.Identity.TenantID,
+			Principal: r.Envelope.Identity.Principal,
+			TraceID:   r.Envelope.Identity.TraceID,
+			RequestID: r.Envelope.Identity.RequestID,
+		},
+	}
+}
+
 // New is deprecated. Use NewDispatcher with options instead.
 func New(fd frontdoor.FrontDoor, af fac.Factory, maxActors int) *Dispatcher {
 	return &Dispatcher{
@@ -153,6 +166,35 @@ func (d *Dispatcher) RecoverableRuns(ctx context.Context) ([]RecoverableRun, err
 		log.Printf("[bootstrap] no pending runs to recover")
 	}
 	return out, nil
+}
+
+// ReplayRecoverableRun replays a single recoverable run through the normal
+// dispatcher ingress path. This preserves fast-fail behavior by only accepting
+// runs that already passed RecoverableRuns state filtering and envelope decode.
+func (d *Dispatcher) ReplayRecoverableRun(ctx context.Context, rr RecoverableRun, sink api.EventSink) error {
+	if !store.IsRecoverable(rr.Record.State) {
+		return fmt.Errorf("%w: non-recoverable state %s", sErr.ErrInvalidCommand, rr.Record.State)
+	}
+	if rr.Envelope.Kind != api.CmdRun || rr.Envelope.Run == nil {
+		return fmt.Errorf("%w: replay requires run envelope", sErr.ErrInvalidCommand)
+	}
+	return d.Handle(ctx, rr.ResolveInput(), sink)
+}
+
+// ReplayRecoverableRuns replays all current recoverable runs in store order.
+// It is intentionally fail-fast: the first replay error stops the loop and is
+// returned to the caller.
+func (d *Dispatcher) ReplayRecoverableRuns(ctx context.Context, sink api.EventSink) error {
+	recoverable, err := d.RecoverableRuns(ctx)
+	if err != nil {
+		return err
+	}
+	for _, rr := range recoverable {
+		if err := d.ReplayRecoverableRun(ctx, rr, sink); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // logicalRunIDFromInput extracts the stable logical run identifier.

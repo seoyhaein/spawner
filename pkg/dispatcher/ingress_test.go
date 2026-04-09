@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,6 +25,21 @@ type mockFD struct {
 
 func (m *mockFD) Resolve(_ context.Context, _ frontdoor.ResolveInput) (frontdoor.ResolveResult, error) {
 	return frontdoor.ResolveResult{SpawnKey: m.key, Cmd: m.cmd}, nil
+}
+
+type replayFD struct{}
+
+func (replayFD) Resolve(_ context.Context, in frontdoor.ResolveInput) (frontdoor.ResolveResult, error) {
+	rs := in.Req.(*api.RunSpec)
+	cmd, err := api.NewRunCommand(rs, api.Command{}.Policy)
+	if err != nil {
+		return frontdoor.ResolveResult{}, err
+	}
+	key := rs.RunID
+	if in.Meta.TenantID != "" {
+		key = in.Meta.TenantID + ":" + rs.RunID
+	}
+	return frontdoor.ResolveResult{SpawnKey: key, Cmd: cmd}, nil
 }
 
 type mockActor struct{ enqueueCalled int }
@@ -242,6 +258,72 @@ func TestIngress_RecoverableRuns_FailsOnMalformedEnvelope(t *testing.T) {
 	}
 }
 
+func TestRecoverableRun_ResolveInputRestoresReplayMetadata(t *testing.T) {
+	rr := dispatcher.RecoverableRun{
+		Record: recoveryRecord(t, "teamA:run-1", store.StateQueued),
+		Envelope: api.RunEnvelope{
+			Version: 1,
+			Kind:    api.CmdRun,
+			Identity: api.RunIdentity{
+				LogicalRunID: "teamA:run-1",
+				AttemptID:    "teamA:run-1/attempt-1",
+				SpawnKey:     "teamA:run-1",
+				TenantID:     "teamA",
+				TraceID:      "trace-1",
+				RequestID:    "req-1",
+				Principal:    "alice",
+			},
+			Run: &api.RunSpec{RunID: "run-1", ImageRef: "busybox:1.36"},
+		},
+	}
+
+	in := rr.ResolveInput()
+	if in.Meta.TenantID != "teamA" || in.Meta.TraceID != "trace-1" || in.Meta.RequestID != "req-1" {
+		t.Fatalf("unexpected replay meta: %+v", in.Meta)
+	}
+	rs, ok := in.Req.(*api.RunSpec)
+	if !ok || rs.RunID != "run-1" {
+		t.Fatalf("unexpected replay req: %#v", in.Req)
+	}
+}
+
+func TestIngress_ReplayRecoverableRun_ReplaysThroughHandle(t *testing.T) {
+	ctx := context.Background()
+	rs := store.NewInMemoryRunStore()
+	rec := recoveryRecord(t, "teamA:run-1", store.StateQueued)
+	if err := rs.Enqueue(ctx, rec); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	act := &mockActor{}
+	d := dispatcher.NewDispatcher(replayFD{}, &mockFactory{act: act}, 4, dispatcher.WithRunStore(rs))
+	recovered, err := d.RecoverableRuns(ctx)
+	if err != nil {
+		t.Fatalf("RecoverableRuns: %v", err)
+	}
+	if len(recovered) != 1 {
+		t.Fatalf("expected 1 recoverable run, got %d", len(recovered))
+	}
+
+	if err := d.ReplayRecoverableRun(ctx, recovered[0], nil); err != nil {
+		t.Fatalf("ReplayRecoverableRun: %v", err)
+	}
+	if act.enqueueCalled == 0 {
+		t.Fatal("expected replay to enqueue actor work")
+	}
+}
+
+func TestIngress_ReplayRecoverableRun_RejectsNonRecoverableState(t *testing.T) {
+	d, _ := newTestDispatcher(nil)
+	rr := dispatcher.RecoverableRun{
+		Record:   recoveryRecord(t, "teamA:run-1", store.StateHeld),
+		Envelope: api.RunEnvelope{Version: 1, Kind: api.CmdRun, Run: &api.RunSpec{RunID: "run-1", ImageRef: "busybox:1.36"}},
+	}
+	if err := d.ReplayRecoverableRun(context.Background(), rr, nil); !errors.Is(err, sErr.ErrInvalidCommand) {
+		t.Fatalf("expected ErrInvalidCommand, got %v", err)
+	}
+}
+
 // TestIngress_BootstrapIsNopWithoutRunStore proves:
 // When no RunStore is configured, Bootstrap() returns nil without error.
 // Backward-compatible with pre-RunStore deployments.
@@ -385,6 +467,10 @@ func TestIngress_DoesNotPersistInvalidResolvedRun(t *testing.T) {
 
 func recoveryRecord(t *testing.T, logicalRunID string, state store.RunState) store.RunRecord {
 	t.Helper()
+	runID := logicalRunID
+	if idx := strings.LastIndex(logicalRunID, ":"); idx >= 0 && idx < len(logicalRunID)-1 {
+		runID = logicalRunID[idx+1:]
+	}
 	env := api.RunEnvelope{
 		Version: 1,
 		Kind:    api.CmdRun,
@@ -394,7 +480,7 @@ func recoveryRecord(t *testing.T, logicalRunID string, state store.RunState) sto
 			SpawnKey:     logicalRunID,
 			TenantID:     "teamA",
 		},
-		Run: &api.RunSpec{RunID: logicalRunID, ImageRef: "busybox:1.36"},
+		Run: &api.RunSpec{RunID: runID, ImageRef: "busybox:1.36"},
 	}
 	payload, err := json.Marshal(env)
 	if err != nil {
