@@ -31,6 +31,44 @@ const (
 	BackoffExponential
 )
 
+type AttemptPhase uint8
+
+const (
+	AttemptPhaseInitialSubmit AttemptPhase = iota
+	AttemptPhaseRecoveryReplay
+	AttemptPhaseManualRequeue
+	AttemptPhaseAutoRetry
+)
+
+type AttemptPolicy struct {
+	RecoveryReplayNewAttempt bool
+	ManualRequeueNewAttempt  bool
+	AutoRetryNewAttempt      bool
+}
+
+func DefaultAttemptPolicy() AttemptPolicy {
+	return AttemptPolicy{
+		RecoveryReplayNewAttempt: false,
+		ManualRequeueNewAttempt:  true,
+		AutoRetryNewAttempt:      true,
+	}
+}
+
+func (p AttemptPolicy) UseNewAttempt(phase AttemptPhase) bool {
+	switch phase {
+	case AttemptPhaseInitialSubmit:
+		return false
+	case AttemptPhaseRecoveryReplay:
+		return p.RecoveryReplayNewAttempt
+	case AttemptPhaseManualRequeue:
+		return p.ManualRequeueNewAttempt
+	case AttemptPhaseAutoRetry:
+		return p.AutoRetryNewAttempt
+	default:
+		return false
+	}
+}
+
 type AdmitPolicy struct {
 	// Queueing / Scheduling
 	Priority  int    // 높을수록 먼저

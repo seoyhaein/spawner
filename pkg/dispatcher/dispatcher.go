@@ -15,6 +15,7 @@ import (
 	sErr "github.com/seoyhaein/spawner/pkg/error"
 	fac "github.com/seoyhaein/spawner/pkg/factory"
 	"github.com/seoyhaein/spawner/pkg/frontdoor"
+	ply "github.com/seoyhaein/spawner/pkg/policy"
 	"github.com/seoyhaein/spawner/pkg/store"
 )
 
@@ -27,8 +28,9 @@ type Dispatcher struct {
 	loopBaseCtx    context.Context // (옵션) 액터 루프 베이스 컨텍스트
 	enqueueTimeout time.Duration   // (옵션) EnqueueCtx 타임아웃
 	// ingress boundary
-	runStore     store.RunStore // nil = skip RunStore (backward-compat)
-	k8sAvailable bool           // false = K8s unreachable; runs held, not dispatched
+	runStore      store.RunStore // nil = skip RunStore (backward-compat)
+	k8sAvailable  bool           // false = K8s unreachable; runs held, not dispatched
+	attemptPolicy ply.AttemptPolicy
 }
 
 type RecoverableRun struct {
@@ -36,16 +38,30 @@ type RecoverableRun struct {
 	Envelope api.RunEnvelope
 }
 
+const (
+	metaLogicalRunID = "spawner.logical_run_id"
+	metaAttemptID    = "spawner.attempt_id"
+)
+
 func (r RecoverableRun) ResolveInput() frontdoor.ResolveInput {
+	return r.ResolveInputWithAttempt(r.Envelope.Identity.AttemptID)
+}
+
+func (r RecoverableRun) ResolveInputWithAttempt(attemptID string) frontdoor.ResolveInput {
+	meta := frontdoor.MetaContext{
+		RPC:       "RunE",
+		TenantID:  r.Envelope.Identity.TenantID,
+		Principal: r.Envelope.Identity.Principal,
+		TraceID:   r.Envelope.Identity.TraceID,
+		RequestID: r.Envelope.Identity.RequestID,
+	}
+	meta.Set(metaLogicalRunID, r.Envelope.Identity.LogicalRunID)
+	if strings.TrimSpace(attemptID) != "" {
+		meta.Set(metaAttemptID, attemptID)
+	}
 	return frontdoor.ResolveInput{
-		Req: r.Envelope.Run,
-		Meta: frontdoor.MetaContext{
-			RPC:       "RunE",
-			TenantID:  r.Envelope.Identity.TenantID,
-			Principal: r.Envelope.Identity.Principal,
-			TraceID:   r.Envelope.Identity.TraceID,
-			RequestID: r.Envelope.Identity.RequestID,
-		},
+		Req:  r.Envelope.Run,
+		Meta: meta,
 	}
 }
 
@@ -60,10 +76,11 @@ func New(fd frontdoor.FrontDoor, af fac.Factory, maxActors int) *Dispatcher {
 
 func NewDispatcher(fd frontdoor.FrontDoor, af fac.Factory, semSize int, opts ...Option) *Dispatcher {
 	d := &Dispatcher{
-		FD:           fd,
-		AF:           af,
-		Sem:          make(chan struct{}, semSize),
-		k8sAvailable: true, // assume available unless WithK8sUnavailable is set
+		FD:            fd,
+		AF:            af,
+		Sem:           make(chan struct{}, semSize),
+		k8sAvailable:  true, // assume available unless WithK8sUnavailable is set
+		attemptPolicy: ply.DefaultAttemptPolicy(),
 	}
 	for _, o := range opts {
 		o(d)
@@ -84,6 +101,9 @@ func WithLoopBaseCtx(base context.Context) Option {
 }
 func WithEnqueueTimeout(dur time.Duration) Option {
 	return func(d *Dispatcher) { d.enqueueTimeout = dur }
+}
+func WithAttemptPolicy(p ply.AttemptPolicy) Option {
+	return func(d *Dispatcher) { d.attemptPolicy = p }
 }
 
 // WithRunStore attaches a RunStore to the Dispatcher.
@@ -172,13 +192,35 @@ func (d *Dispatcher) RecoverableRuns(ctx context.Context) ([]RecoverableRun, err
 // dispatcher ingress path. This preserves fast-fail behavior by only accepting
 // runs that already passed RecoverableRuns state filtering and envelope decode.
 func (d *Dispatcher) ReplayRecoverableRun(ctx context.Context, rr RecoverableRun, sink api.EventSink) error {
+	return d.ReplayRecoverableRunWithPhase(ctx, rr, ply.AttemptPhaseRecoveryReplay, sink)
+}
+
+func (d *Dispatcher) PrepareReplayInput(rr RecoverableRun, phase ply.AttemptPhase) (frontdoor.ResolveInput, error) {
 	if !store.IsRecoverable(rr.Record.State) {
-		return fmt.Errorf("%w: non-recoverable state %s", sErr.ErrInvalidCommand, rr.Record.State)
+		return frontdoor.ResolveInput{}, fmt.Errorf("%w: non-recoverable state %s", sErr.ErrInvalidCommand, rr.Record.State)
 	}
 	if rr.Envelope.Kind != api.CmdRun || rr.Envelope.Run == nil {
-		return fmt.Errorf("%w: replay requires run envelope", sErr.ErrInvalidCommand)
+		return frontdoor.ResolveInput{}, fmt.Errorf("%w: replay requires run envelope", sErr.ErrInvalidCommand)
 	}
-	return d.Handle(ctx, rr.ResolveInput(), sink)
+
+	attemptID := rr.Envelope.Identity.AttemptID
+	if d.attemptPolicy.UseNewAttempt(phase) {
+		attemptID = nextAttemptID(rr.Envelope.Identity.LogicalRunID, rr.Envelope.Identity.AttemptID)
+	}
+	return rr.ResolveInputWithAttempt(attemptID), nil
+}
+
+func (d *Dispatcher) ReplayRecoverableRunWithPhase(
+	ctx context.Context,
+	rr RecoverableRun,
+	phase ply.AttemptPhase,
+	sink api.EventSink,
+) error {
+	in, err := d.PrepareReplayInput(rr, phase)
+	if err != nil {
+		return err
+	}
+	return d.Handle(ctx, in, sink)
 }
 
 // ReplayRecoverableRuns replays all current recoverable runs in store order.
@@ -201,6 +243,9 @@ func (d *Dispatcher) ReplayRecoverableRuns(ctx context.Context, sink api.EventSi
 // For runnable inputs, this should be derived from tenant + run spec identity,
 // not from transport-scoped ids such as trace ids.
 func logicalRunIDFromInput(in frontdoor.ResolveInput) string {
+	if v, ok := in.Meta.Get(metaLogicalRunID); ok && strings.TrimSpace(v) != "" {
+		return strings.TrimSpace(v)
+	}
 	if rs, ok := in.Req.(*api.RunSpec); ok && rs.RunID != "" {
 		if in.Meta.TenantID != "" {
 			return in.Meta.TenantID + ":" + rs.RunID
@@ -215,6 +260,28 @@ func initialAttemptID(logicalRunID string) string {
 		return ""
 	}
 	return logicalRunID + "/attempt-1"
+}
+
+func nextAttemptID(logicalRunID, current string) string {
+	if logicalRunID == "" {
+		return ""
+	}
+	const marker = "/attempt-"
+	if strings.HasPrefix(current, logicalRunID+marker) {
+		suffix := strings.TrimPrefix(current, logicalRunID+marker)
+		var n int
+		if _, err := fmt.Sscanf(suffix, "%d", &n); err == nil && n >= 1 {
+			return fmt.Sprintf("%s/attempt-%d", logicalRunID, n+1)
+		}
+	}
+	return logicalRunID + "/attempt-2"
+}
+
+func attemptIDFromInput(in frontdoor.ResolveInput, logicalRunID string) string {
+	if v, ok := in.Meta.Get(metaAttemptID); ok && strings.TrimSpace(v) != "" {
+		return strings.TrimSpace(v)
+	}
+	return initialAttemptID(logicalRunID)
 }
 
 func buildRunEnvelope(in frontdoor.ResolveInput, rr frontdoor.ResolveResult) (api.RunEnvelope, error) {
@@ -233,7 +300,7 @@ func buildRunEnvelope(in frontdoor.ResolveInput, rr frontdoor.ResolveResult) (ap
 		Kind:    api.CmdRun,
 		Identity: api.RunIdentity{
 			LogicalRunID: logicalRunID,
-			AttemptID:    initialAttemptID(logicalRunID),
+			AttemptID:    attemptIDFromInput(in, logicalRunID),
 			SpawnKey:     rr.SpawnKey,
 			TenantID:     in.Meta.TenantID,
 			TraceID:      in.Meta.TraceID,

@@ -13,6 +13,7 @@ import (
 	"github.com/seoyhaein/spawner/pkg/dispatcher"
 	sErr "github.com/seoyhaein/spawner/pkg/error"
 	"github.com/seoyhaein/spawner/pkg/frontdoor"
+	"github.com/seoyhaein/spawner/pkg/policy"
 	"github.com/seoyhaein/spawner/pkg/store"
 )
 
@@ -310,6 +311,58 @@ func TestIngress_ReplayRecoverableRun_ReplaysThroughHandle(t *testing.T) {
 	}
 	if act.enqueueCalled == 0 {
 		t.Fatal("expected replay to enqueue actor work")
+	}
+}
+
+func TestIngress_ReplayRecoverableRunWithPhase_ManualRequeueAllocatesNewAttempt(t *testing.T) {
+	d, _ := newTestDispatcher(nil, dispatcher.WithAttemptPolicy(policy.DefaultAttemptPolicy()))
+	rr := dispatcher.RecoverableRun{
+		Record: recoveryRecord(t, "teamA:run-1", store.StateQueued),
+		Envelope: api.RunEnvelope{
+			Version: 1,
+			Kind:    api.CmdRun,
+			Identity: api.RunIdentity{
+				LogicalRunID: "teamA:run-1",
+				AttemptID:    "teamA:run-1/attempt-1",
+				SpawnKey:     "teamA:run-1",
+				TenantID:     "teamA",
+			},
+			Run: &api.RunSpec{RunID: "run-1", ImageRef: "busybox:1.36"},
+		},
+	}
+
+	in, err := d.PrepareReplayInput(rr, policy.AttemptPhaseManualRequeue)
+	if err != nil {
+		t.Fatalf("PrepareReplayInput: %v", err)
+	}
+	if got, ok := in.Meta.Get("spawner.attempt_id"); !ok || got != "teamA:run-1/attempt-2" {
+		t.Fatalf("expected replay input to carry explicit attempt id, got %q ok=%v", got, ok)
+	}
+}
+
+func TestIngress_PrepareReplayInput_RecoveryKeepsAttempt(t *testing.T) {
+	d, _ := newTestDispatcher(nil, dispatcher.WithAttemptPolicy(policy.DefaultAttemptPolicy()))
+	rr := dispatcher.RecoverableRun{
+		Record: recoveryRecord(t, "teamA:run-1", store.StateQueued),
+		Envelope: api.RunEnvelope{
+			Version: 1,
+			Kind:    api.CmdRun,
+			Identity: api.RunIdentity{
+				LogicalRunID: "teamA:run-1",
+				AttemptID:    "teamA:run-1/attempt-1",
+				SpawnKey:     "teamA:run-1",
+				TenantID:     "teamA",
+			},
+			Run: &api.RunSpec{RunID: "run-1", ImageRef: "busybox:1.36"},
+		},
+	}
+
+	in, err := d.PrepareReplayInput(rr, policy.AttemptPhaseRecoveryReplay)
+	if err != nil {
+		t.Fatalf("PrepareReplayInput: %v", err)
+	}
+	if got, ok := in.Meta.Get("spawner.attempt_id"); !ok || got != "teamA:run-1/attempt-1" {
+		t.Fatalf("expected recovery replay to keep attempt id, got %q ok=%v", got, ok)
 	}
 }
 
