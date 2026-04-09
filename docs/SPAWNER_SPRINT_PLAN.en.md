@@ -1,216 +1,210 @@
 # Spawner Sprint Plan
 
-This document lays out a sprint plan for moving `spawner` from a PoC execution backend toward a product-grade library and service core.
+This document recalibrates the original `spawner` productization plan against the current repository state.
 
-The plan is based on two inputs:
+This is not a cosmetic rewrite. It reflects what is already implemented in code today.
 
-- what `pipeline-lite-poc` actually validated in practice
-- what the static `spawner` review identified as weak library contracts, lifecycle gaps, recovery gaps, and validation gaps
+- Recently completed: lifecycle guards, command validation, replay-safe envelopes, fast-fail recovery, policy-driven attempts, run/attempt history
+- Main remaining gaps: state contract documentation, stricter duplicate/replay semantics, backend-neutral naming, `MetaContext` / `policy` / `RunSpec` surface hardening
+- Explicitly out of scope here: informer migration, real cluster integration hardening, deployment automation
 
-The main interpretation is straightforward:
+## Recheck Summary
 
-- the execution backend path (`DriverK8s`, `BoundedDriver`, `K8sObserver`) looks directionally strong for the PoC
-- the library-facing contracts around `Dispatcher`, `Factory`, `Actor`, `FrontDoor`, and `RunStore` are still loose
-- therefore the next work should prioritize lifecycle, validation, identity, and recovery envelopes before feature expansion
+As of `2026-04-09`, the current assessment is:
+
+- The execution path is already fairly solid for a PoC backend.
+- Most of the original Sprint 1 and Sprint 2 goals are already implemented.
+- Sprint 3 was partially pulled forward: recovery helpers, replay helpers, and attempt policy already exist.
+- Because of that, the old 4-sprint plan is no longer the right shape. The remaining work should be repackaged into `3 residual sprints`.
+
+## Current Status Snapshot
+
+Completed or mostly completed:
+
+- dispatcher lifecycle release and semaphore recovery
+- empty spawn key / invalid command guards
+- `Command` constructors and `Validate()`
+- `RunSpec.Validate()`
+- logical run id / attempt id separation
+- replay-safe `RunEnvelope`
+- fast-fail recovery candidate filtering
+- `RecoverableRuns()` / replay helpers
+- attempt policy introduction
+- `RunStore` summary + attempt history structure
+
+Main remaining gaps:
+
+- canonical mapping between persisted state and event state
+- stricter duplicate submit / replay / manual requeue semantics
+- typed attempt reason/cause model
+- removal of backend-specific names such as `k8sAvailable` and `ErrK8sUnavailable`
+- `MetaContext` copy semantics or immutability rules
+- stronger `policy` validation/defaulting
+- product-oriented `RunSpec` expansion
+- turning `cmd/server` from example-ish bootstrap code into a clearer service contract example
 
 ## Planning Assumptions
 
-- Baseline date: `2026-04-09`
+- Reference date: `2026-04-09`
 - Sprint length: `2 weeks`
 - Assumed start date: `2026-04-13`
-- Team assumption: one main implementer
-- In scope: hardening `spawner` as a library/service boundary
-- Out of scope: informer migration, full Kueue/cluster hardening, deployment automation
+- Team assumption: one primary implementer
+- Current baseline: core replay/recovery path already exists
 
-## Sprint Summary
+## Revised Sprint Summary
 
 | Sprint | Dates | Theme | Primary Goal |
 | --- | --- | --- | --- |
-| Sprint 1 | 2026-04-13 ~ 2026-04-24 | Lifecycle Stabilization | Remove real failure risks in dispatcher/actor/factory boundaries |
-| Sprint 2 | 2026-04-27 ~ 2026-05-08 | Safe Command And Identity | Lock command validation, logical run identity, and stored envelope contracts |
-| Sprint 3 | 2026-05-11 ~ 2026-05-22 | Recovery And State Contract | Promote recovery to a real API and define canonical persisted/event state mapping |
-| Sprint 4 | 2026-05-25 ~ 2026-06-05 | Library Surface Hardening | Clean up policy, backend-neutral naming, and public API surface |
+| Sprint R1 | 2026-04-13 ~ 2026-04-24 | Recovery Contract Hardening | lock down recovery/state/duplicate semantics in code and docs |
+| Sprint R2 | 2026-04-27 ~ 2026-05-08 | Library Surface Neutralization | remove backend-specific terminology and harden meta/policy contracts |
+| Sprint R3 | 2026-05-11 ~ 2026-05-22 | Product Surface Expansion | expand `RunSpec` and align examples/docs/API surface |
 
-## Sprint 1
+## Sprint R1
 
 Dates: `2026-04-13 ~ 2026-04-24`
 
 Goals:
 
-- fix the structure where `Dispatcher.Sem` is not clearly released on the normal path
-- lock actor unbind / terminate / reuse lifecycle with code and tests
-- reduce immediate hazards such as empty spawn keys, unchecked bind success, and blocking sink leak risk
+- Define recovery as a real service contract, not just a helper path.
+- Make persisted state and transient event state agree in code, tests, and docs.
+- Preserve fast-fail while clearly separating duplicate submit, recovery replay, and manual requeue.
 
 Work items:
 
-- make bind/register/unbind/release timing explicit in `Dispatcher`
-- add `OnTerminate`-driven cleanup or explicitly constrain the current contract
-- document `Factory` idle-pool reuse rules
-- add empty spawn key guards
-- validate resolved routing results
-- harden event delivery so timeout paths do not leak goroutines behind blocking sinks
-- add regression tests showing repeated distinct runs do not saturate the dispatcher after normal completion
+- document persisted lifecycle vs transient event lifecycle mapping
+- write a decision table for duplicate submit / recovery replay / manual requeue / auto retry
+- lift `AttemptRecord.Reason` into an enum or typed cause model
+- lock down schema mismatch / malformed envelope handling during replay
+- extend tests for recoverable vs non-recoverable state handling
+- define terminal semantics from an operator-facing perspective
 
 Deliverables:
 
-- documented lifecycle sequence
-- dispatcher/factory/actor regression test set
-- guards for empty spawn keys and invalid resolve results
-- safe event-delivery wrapper or non-blocking sink adapter
+- state contract document
+- recovery semantics regression tests
+- typed attempt cause model
+- duplicate/replay decision table
 
 Exit criteria:
 
-- distinct `runID`s can be processed sequentially without permanent saturation after normal completion
-- actor reuse behavior is locked by tests
-- empty spawn keys are rejected before dispatcher admission
-- blocking sink behavior has an explicit anti-leak strategy in code
+- the code and docs answer "why is this state recoverable?" consistently
+- replay, manual requeue, and duplicate submit are covered as distinct tested paths
+- attempt history reasons are no longer just free-form strings
 
-## Sprint 2
+Risks:
+
+- pushing too hard toward a single unified state model may blur persisted and transient concepts again
+- duplicate semantics may conflict later with orchestrator requirements if locked down too early
+
+## Sprint R2
 
 Dates: `2026-04-27 ~ 2026-05-08`
 
 Goals:
 
-- make `Command` and input payloads type-safe
-- separate logical run id, spawn key, and attempt identity
-- replace best-effort payload storage with a replay-safe envelope
+- remove Kubernetes-specific terminology from dispatcher/driver-facing library contracts
+- make mutable meta bag and policy surfaces safer and easier to reason about
 
 Work items:
 
-- add `NewRunCommand`, `NewCancelCommand`, `NewSignalCommand`, and similar constructors
-- add `Command.Validate()`
-- add nil guards at actor entry points
-- add `RunSpec.Validate()`
-- define stable logical run id rules
-- introduce attempt ids
-- introduce `RunEnvelope` or equivalent
-- store `version`, `kind`, `meta`, `spec`, and `identity` in persisted payloads
+- rename `k8sAvailable` to a generic executor/backend availability term
+- replace `ErrK8sUnavailable` with a backend-neutral unavailable error
+- add `MetaContext` copy semantics or immutable usage rules
+- add `policy` validation/defaulting/merge rules
+- document `AttemptPolicy` and `AdmitPolicy` usage examples
+- document hold semantics for `NopDriver` and dispatcher behavior
 
 Deliverables:
 
-- typed constructors and validation API
-- documented run/attempt/spawn identity rules
-- replay-safe envelope type
-- removal of `json.Marshal(in.Req)` best-effort payload persistence
+- backend-neutral naming update
+- safer `MetaContext` contract
+- stronger `policy` tests and docs
+- migration note
 
 Exit criteria:
 
-- invalid `Command` combinations are rejected at construction or validation time
-- `RunID` is no longer overloaded across logical and physical identities
-- persisted payloads contain the minimum information needed for safe replay
+- dispatcher is less coupled to a Kubernetes-specific name
+- meta propagation side-effect risks are reduced in code or docs
+- policy defaulting and validation are covered by tests
 
-## Sprint 3
+Risks:
+
+- naming changes can widen the external change footprint
+- moving toward value-copy meta semantics may affect ergonomics before it affects performance
+
+## Sprint R3
 
 Dates: `2026-05-11 ~ 2026-05-22`
 
 Goals:
 
-- promote bootstrap from a helper into a real recovery API
-- define canonical mapping between persisted lifecycle state and event state
+- build a more product-ready API surface on top of the now-stabilized core contract
+- clarify intended usage through `RunSpec`, examples, and documentation
 
 Work items:
 
-- connect `Bootstrap()` to an actual replay workflow
-- design `Recover()` or `ReplayRecoveredRuns()` style APIs
-- document persisted lifecycle and transient event state separately
-- define terminal semantics, retry transitions, and cancel transitions
-- distinguish duplicate submit, replay submit, and already-running resubmission behavior
-- define schema mismatch and validation failure handling during recovery
+- review minimal `RunSpec` expansion: version, annotations, cleanup, retry correlation, etc.
+- clean up `cmd/server` so bootstrap/replay examples reflect the real contract more clearly
+- refresh README and bilingual review docs
+- write a migration note from the sibling `poc` integration perspective
+- refine public constructors/helpers if needed
 
 Deliverables:
 
-- recovery API
-- state mapping document and tests
-- duplicate/replay semantics tests
-- persisted envelope version mismatch handling strategy
-
-Exit criteria:
-
-- queued and admitted runs can follow a standard replay path after restart
-- persisted state and event state relationships are aligned across code, docs, and tests
-- duplicate submit and replay submit are behaviorally distinct and explicit
-
-## Sprint 4
-
-Dates: `2026-05-25 ~ 2026-06-05`
-
-Goals:
-
-- harden the public library surface for product use
-- clean up policy semantics, naming, and API shape
-
-Work items:
-
-- add validation/defaulting/merge semantics to `policy`
-- replace backend-specific names such as `k8sAvailable` with generic executor terminology
-- expand `RunSpec`
-- define `MetaContext` immutability or copy semantics
-- improve `EventSink` with error-aware or buffered adapters
-- update docs and examples
-
-Deliverables:
-
-- stronger policy package
-- backend-neutral naming cleanup
 - expanded `RunSpec`
-- library examples and migration notes
+- updated examples and docs
+- migration note
+- first-pass product usage guide
 
 Exit criteria:
 
-- public APIs have documented validation and defaulting behavior
-- dispatcher terminology is no longer tightly coupled to a specific backend name
-- examples are updated to the newer contract
+- `RunSpec` no longer looks like a PoC-only payload
+- bootstrap/replay examples demonstrate the intended contract without misleading shortcuts
+- the sibling `poc` repo has a clear path to follow the revised contract
 
-## Recommended Sequencing Inside Each Sprint
+Risks:
 
-Within each sprint, the recommended order is:
+- expanding the API surface too aggressively can blur the core contract again
+- example code can be mistaken for production service code unless documented carefully
 
-1. write the contract doc first
-2. add failing regression tests
-3. implement the minimum change needed to pass
-4. clean up naming, docs, and examples
-5. run lint, test, coverage, and update release notes
+## Deferred Items
+
+Important, but intentionally outside these residual sprints:
+
+- `DriverK8s.Wait()` polling -> watch/informer migration
+- real Kueue/cluster integration hardening
+- deployment, HA, and observability pipeline automation
 
 ## Effort Estimate
 
-Rough estimate for one main implementer:
+Rough estimate for one primary implementer:
 
-- Sprint 1: `8 ~ 10` working days
-- Sprint 2: `8 ~ 10` working days
-- Sprint 3: `8 ~ 10` working days
-- Sprint 4: `6 ~ 8` working days
+- Sprint R1: `7 ~ 9` working days
+- Sprint R2: `6 ~ 8` working days
+- Sprint R3: `6 ~ 8` working days
 
-Overall estimate:
+Total remaining effort:
 
-- focused implementation: `30 ~ 38` working days
-- calendar duration: about `8 weeks`
-
-## What Must Not Slip
-
-These items should not be deferred:
-
-- dispatcher normal-path lifecycle release
-- invalid command combinations
-- logical run id vs attempt id confusion
-- best-effort payload persistence
-- empty spawn key acceptance
+- focused implementation: `19 ~ 25` working days
+- calendar duration: about `6 weeks`
 
 ## Suggested Milestones
 
-- `2026-04-24`: lifecycle bugs and validation P0 closed
-- `2026-05-08`: command, identity, and envelope contracts fixed
-- `2026-05-22`: recovery flow and state mapping fixed
-- `2026-06-05`: first hardening pass on the public library surface complete
+- `2026-04-24`: recovery/state/duplicate semantics locked down
+- `2026-05-08`: backend-neutral naming + policy/meta contracts aligned
+- `2026-05-22`: first product-facing `RunSpec`/docs/examples pass complete
 
 ## Final Recommendation
 
-`spawner` should harden its library contract before expanding execution behavior further.
+`spawner` has already moved well past the earliest stabilization phase.
 
-The first priority is not adding more features.
+So the right move now is not to replay the original early sprints, but to narrow the remaining contract gaps.
 
-- lifecycle release
-- command validation
-- identity separation
-- replay-safe envelope
+The most important remaining work is not feature expansion.
 
-Those four items should be fixed first. Recovery, policy, and API expansion become meaningful only after that.
+- make recovery semantics explicit and explainable
+- lock down duplicate/replay/manual requeue behavior
+- remove backend-specific naming from library contracts
+- harden policy/meta/API surfaces
+
+Once those are in place, informer migration and operational hardening will have a much cleaner foundation.
