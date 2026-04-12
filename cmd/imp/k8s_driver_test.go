@@ -31,19 +31,29 @@ func TestDriverK8sPrepare_ValidatesRequiredFields(t *testing.T) {
 
 func TestBuildJob_MapsSpecFields(t *testing.T) {
 	spec := api.RunSpec{
-		RunID:    "My.Run_01",
-		ImageRef: "busybox:1.36",
-		Command:  []string{"sh", "-c", "echo hi"},
+		SpecVersion: 1,
+		RunID:       "My.Run_01",
+		ImageRef:    "busybox:1.36",
+		Command:     []string{"sh", "-c", "echo hi"},
 		Env: map[string]string{
 			"FOO": "bar",
+		},
+		EnvFieldRefs: map[string]string{
+			"NODE_NAME": "spec.nodeName",
 		},
 		Labels: map[string]string{
 			"kueue.x-k8s.io/queue-name": "poc-standard-lq",
 		},
+		Annotations: map[string]string{
+			"example.com/team": "genomics",
+		},
 		Mounts: []api.Mount{
 			{Source: "pvc-a", Target: "/data", ReadOnly: false},
 		},
-		Resources: api.Resources{CPU: "100m", Memory: "64Mi"},
+		Resources:     api.Resources{CPU: "100m", Memory: "64Mi"},
+		CorrelationID: "sample-001",
+		Cleanup:       api.CleanupPolicy{TTLSecondsAfterFinished: 600},
+		Placement:     &api.Placement{NodeSelector: map[string]string{"kubernetes.io/hostname": "lab-worker-1"}},
 	}
 
 	job := buildJob(spec, "default")
@@ -60,11 +70,20 @@ func TestBuildJob_MapsSpecFields(t *testing.T) {
 	if q := job.Labels["kueue.x-k8s.io/queue-name"]; q != "poc-standard-lq" {
 		t.Fatalf("unexpected queue label: %q", q)
 	}
+	if got := job.Annotations["example.com/team"]; got != "genomics" {
+		t.Fatalf("unexpected annotation: %q", got)
+	}
+	if got := job.Annotations["spawner.correlation-id"]; got != "sample-001" {
+		t.Fatalf("unexpected correlation annotation: %q", got)
+	}
 	if job.Spec.Suspend == nil || !*job.Spec.Suspend {
 		t.Fatal("expected Job to be created suspended for Kueue")
 	}
 	if job.Spec.BackoffLimit == nil || *job.Spec.BackoffLimit != 0 {
 		t.Fatal("expected backoffLimit=0")
+	}
+	if job.Spec.TTLSecondsAfterFinished == nil || *job.Spec.TTLSecondsAfterFinished != 600 {
+		t.Fatalf("expected ttlSecondsAfterFinished=600, got %+v", job.Spec.TTLSecondsAfterFinished)
 	}
 	if len(job.Spec.Template.Spec.Containers) != 1 {
 		t.Fatalf("expected 1 container, got %d", len(job.Spec.Template.Spec.Containers))
@@ -73,8 +92,11 @@ func TestBuildJob_MapsSpecFields(t *testing.T) {
 	if c.Image != spec.ImageRef {
 		t.Fatalf("unexpected image: %q", c.Image)
 	}
-	if got := c.Env[0].Value; got != "bar" {
+	if got := envValueByName(c.Env, "FOO"); got != "bar" {
 		t.Fatalf("unexpected env value: %q", got)
+	}
+	if got := envFieldRefByName(c.Env, "NODE_NAME"); got != "spec.nodeName" {
+		t.Fatalf("unexpected env fieldRef: %q", got)
 	}
 	cpuQty := c.Resources.Requests[corev1.ResourceCPU]
 	if got := cpuQty.String(); got != "100m" {
@@ -87,12 +109,36 @@ func TestBuildJob_MapsSpecFields(t *testing.T) {
 	if len(job.Spec.Template.Spec.Volumes) != 1 {
 		t.Fatalf("expected 1 volume, got %d", len(job.Spec.Template.Spec.Volumes))
 	}
+	if got := job.Spec.Template.Spec.NodeSelector["kubernetes.io/hostname"]; got != "lab-worker-1" {
+		t.Fatalf("unexpected nodeSelector: %q", got)
+	}
 	if got := job.Spec.Template.Spec.Volumes[0].PersistentVolumeClaim.ClaimName; got != "pvc-a" {
 		t.Fatalf("unexpected pvc claim: %q", got)
 	}
 	if len(c.VolumeMounts) != 1 || c.VolumeMounts[0].MountPath != "/data" {
 		t.Fatal("expected volume mount at /data")
 	}
+	if got := job.Spec.Template.Annotations["spawner.correlation-id"]; got != "sample-001" {
+		t.Fatalf("expected template correlation annotation, got %q", got)
+	}
+}
+
+func envValueByName(vars []corev1.EnvVar, name string) string {
+	for _, v := range vars {
+		if v.Name == name {
+			return v.Value
+		}
+	}
+	return ""
+}
+
+func envFieldRefByName(vars []corev1.EnvVar, name string) string {
+	for _, v := range vars {
+		if v.Name == name && v.ValueFrom != nil && v.ValueFrom.FieldRef != nil {
+			return v.ValueFrom.FieldRef.FieldPath
+		}
+	}
+	return ""
 }
 
 func TestDriverK8sStartAndCancel_WithFakeClient(t *testing.T) {

@@ -163,11 +163,19 @@ func buildJob(spec api.RunSpec, ns string) *batchv1.Job {
 		labels[k] = v
 	}
 
+	annotations := make(map[string]string, len(spec.Annotations)+1)
+	for k, v := range spec.Annotations {
+		annotations[k] = v
+	}
+	if spec.CorrelationID != "" {
+		annotations["spawner.correlation-id"] = spec.CorrelationID
+	}
+
 	container := corev1.Container{
 		Name:            "main",
 		Image:           spec.ImageRef,
 		Command:         spec.Command,
-		Env:             buildEnvVars(spec.Env),
+		Env:             buildEnvVars(spec.Env, spec.EnvFieldRefs),
 		Resources:       buildResources(spec.Resources),
 		ImagePullPolicy: corev1.PullIfNotPresent,
 	}
@@ -177,35 +185,63 @@ func buildJob(spec api.RunSpec, ns string) *batchv1.Job {
 
 	suspend := true
 	backoffLimit := int32(0) // PoC: no retry; fail immediately on pod failure
+	var ttlSecondsAfterFinished *int32
+	if spec.Cleanup.TTLSecondsAfterFinished > 0 {
+		ttl := spec.Cleanup.TTLSecondsAfterFinished
+		ttlSecondsAfterFinished = &ttl
+	}
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      jobName,
-			Namespace: ns,
-			Labels:    labels,
+			Name:        jobName,
+			Namespace:   ns,
+			Labels:      labels,
+			Annotations: annotations,
 		},
 		Spec: batchv1.JobSpec{
-			Suspend:      &suspend,
-			BackoffLimit: &backoffLimit,
+			Suspend:                 &suspend,
+			BackoffLimit:            &backoffLimit,
+			TTLSecondsAfterFinished: ttlSecondsAfterFinished,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels: labels,
+					Labels:      labels,
+					Annotations: annotations,
 				},
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
 					Containers:    []corev1.Container{container},
 					Volumes:       volumes,
+					NodeSelector:  buildNodeSelector(spec.Placement),
 				},
 			},
 		},
 	}
 }
 
-func buildEnvVars(env map[string]string) []corev1.EnvVar {
-	vars := make([]corev1.EnvVar, 0, len(env))
+func buildEnvVars(env map[string]string, fieldRefs map[string]string) []corev1.EnvVar {
+	vars := make([]corev1.EnvVar, 0, len(env)+len(fieldRefs))
 	for k, v := range env {
 		vars = append(vars, corev1.EnvVar{Name: k, Value: v})
 	}
+	for k, path := range fieldRefs {
+		vars = append(vars, corev1.EnvVar{
+			Name: k,
+			ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{FieldPath: path},
+			},
+		})
+	}
 	return vars
+}
+
+func buildNodeSelector(p *api.Placement) map[string]string {
+	if p == nil || len(p.NodeSelector) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(p.NodeSelector))
+	for k, v := range p.NodeSelector {
+		out[k] = v
+	}
+	return out
 }
 
 func buildResources(r api.Resources) corev1.ResourceRequirements {

@@ -94,23 +94,44 @@ func (c Command) Validate() error {
 }
 
 type RunSpec struct {
-	RunID     string
-	ImageRef  string // digest-locked preferred
-	Command   []string
-	Env       map[string]string
-	Labels    map[string]string // K8s labels; kueue.x-k8s.io/queue-name goes here
-	Mounts    []Mount
-	Resources Resources
+	SpecVersion   int
+	RunID         string
+	ImageRef      string // digest-locked preferred
+	Command       []string
+	Env           map[string]string
+	EnvFieldRefs  map[string]string
+	Labels        map[string]string // K8s labels; kueue.x-k8s.io/queue-name goes here
+	Annotations   map[string]string
+	Mounts        []Mount
+	Resources     Resources
+	CorrelationID string
+	Cleanup       CleanupPolicy
+	Placement     *Placement
 }
 
 func (r RunSpec) Validate() error {
+	if r.SpecVersion < 0 {
+		return sErr.ErrInvalidCommand
+	}
 	if strings.TrimSpace(r.RunID) == "" {
 		return sErr.ErrInvalidCommand
 	}
 	if strings.TrimSpace(r.ImageRef) == "" {
 		return sErr.ErrInvalidCommand
 	}
+	for _, m := range r.Mounts {
+		if strings.TrimSpace(m.Source) == "" || strings.TrimSpace(m.Target) == "" {
+			return sErr.ErrInvalidCommand
+		}
+	}
+	if r.Cleanup.TTLSecondsAfterFinished < 0 {
+		return sErr.ErrInvalidCommand
+	}
 	return nil
+}
+
+type CleanupPolicy struct {
+	TTLSecondsAfterFinished int32
 }
 
 type Mount struct {
@@ -122,6 +143,10 @@ type Mount struct {
 type Resources struct {
 	CPU    string
 	Memory string
+}
+
+type Placement struct {
+	NodeSelector map[string]string
 }
 
 type RunIdentity struct {
