@@ -30,6 +30,12 @@ func (m *Mailbox[T]) TryEnqueue(v T) bool {
 	select {
 	case <-m.closed:
 		return false
+	default:
+	}
+
+	select {
+	case <-m.closed:
+		return false
 	case m.ch <- v:
 		return true
 	default:
@@ -44,6 +50,13 @@ func (m *Mailbox[T]) Enqueue(ctx context.Context, v T) bool {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+
+	select {
+	case <-m.closed:
+		return false
+	default:
+	}
+
 	select {
 	case <-m.closed:
 		return false
@@ -98,9 +111,7 @@ func ForwardChan[T any](ctx context.Context, m *Mailbox[T], in <-chan T) {
 					return // 입력 채널 종료 → 생산자 종료
 				}
 				// 드롭 정책(논블로킹). 백프레셔 원하면 sendCtx(ctx, v)로 교체.
-				if !try(v) {
-					// TODO: 필요시 드롭 카운터/로그
-				}
+				_ = try(v)
 			}
 		}
 	})
@@ -115,7 +126,6 @@ func StartProducerPool[T any](
 ) (cancel context.CancelFunc) {
 	ctx, cancel := context.WithCancel(parent)
 	for i := 0; i < n; i++ {
-		i := i // capture
 		go WithProducer(m, func(try func(T) bool, sendCtx func(context.Context, T) bool) {
 			gen(ctx, i, try, sendCtx)
 		})

@@ -3,16 +3,20 @@ package frontdoor
 import (
 	"context"
 	"fmt"
-	"time"
+	"strings"
 
 	"github.com/seoyhaein/spawner/pkg/api"
 	sErr "github.com/seoyhaein/spawner/pkg/error"
-	ply "github.com/seoyhaein/spawner/pkg/policy"
 )
 
 type ResolveInput struct {
 	Req  any
 	Meta MetaContext
+}
+
+func (in ResolveInput) Clone() ResolveInput {
+	in.Meta = in.Meta.Clone()
+	return in
 }
 
 type ResolveResult struct {
@@ -35,17 +39,23 @@ func NewTableFrontDoor(rules ...Rule) *TableFrontDoor {
 // Resolve TODO 적용 규칙에 대해서는 생각해줘야 함.
 
 func (fd *TableFrontDoor) Resolve(ctx context.Context, in ResolveInput) (ResolveResult, error) {
+	in = in.Clone()
 	for _, rl := range fd.rules {
 		if rl.Match(in) {
 			cmd, err := rl.BuildCmd(in)
 			if err != nil {
 				return ResolveResult{}, err
 			}
-			if cmd.Policy.Timeout == 0 {
-				cmd.Policy = ply.DefaultPolicyB(30 * time.Minute) // TODO cmd 에 넣은 것은 생각을 해주자.
+			spawnKey := strings.TrimSpace(rl.SpawnKeyFn(in))
+			if spawnKey == "" {
+				return ResolveResult{}, fmt.Errorf("%w: rpc=%s", sErr.ErrInvalidSpawnKey, in.Meta.RPC)
+			}
+			cmd.Policy = cmd.Policy.WithDefaults()
+			if err := cmd.Policy.Validate(); err != nil {
+				return ResolveResult{}, err
 			}
 			return ResolveResult{
-				SpawnKey: rl.SpawnKeyFn(in),
+				SpawnKey: spawnKey,
 				Cmd:      cmd,
 			}, nil
 		}

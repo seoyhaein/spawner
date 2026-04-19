@@ -65,9 +65,9 @@ func HasReqType[T any]() Pred {
 
 // 헤더/메타 검사(있다면)
 
-/*func HeaderEq(k, v string) Pred {
+/* func HeaderEq(k, v string) Pred {
 	return func(in ResolveInput) bool { return in.Meta.Headers[k] == v }
-}*/
+} */
 
 func MetaEq(key, val string) Pred {
 	key = strings.ToLower(key)
@@ -80,10 +80,10 @@ func MetaEq(key, val string) Pred {
 // 사용 예시
 
 // HTTP 헤더 X-Cmd: Cancel
-//Match: MetaEq("hdr.x-cmd", "Cancel")
+// Match: MetaEq("hdr.x-cmd", "Cancel")
 
 // gRPC 메타 x-cmd: Cancel
-//Match: MetaEq("md.x-cmd", "Cancel")
+// Match: MetaEq("md.x-cmd", "Cancel")
 
 // 시스템 프린시펄 제외
 
@@ -118,13 +118,15 @@ var CancelRule = Rule{
 	BuildCmd: func(in ResolveInput) (api.Command, error) {
 		cr := in.Req.(*api.CancelReq)
 		pol := policy.DefaultPolicyB(0) // 혹은 policyFn에서 Cancel에 맞는 일부만 사용
-		return api.Command{Kind: api.CmdCancel, Cancel: cr, Policy: pol}, nil
+		return api.NewCancelCommand(cr, pol)
 	},
 }
 
 func lookupSpawnID(idemKey, tenantID string) string {
-	/*if id, ok := idemIndex.Lookup(tenantID, idemKey); ok {
-		return id
-	}*/
+	/*
+		if id, ok := idemIndex.Lookup(tenantID, idemKey); ok {
+			return id
+		}
+	*/
 	return ""
 }

@@ -5,8 +5,11 @@ import (
 	"time"
 )
 
-// MetaContext 같은 경우, SpawnKey 생성에 필요한 정보들을 담고 있을 수 있음.
-// 따라서 향후 수정될 수도 있음.
+// MetaContext carries transport and routing metadata.
+//
+// Contract:
+// callers should treat MetaContext as immutable once attached to ResolveInput.
+// Internal code that needs to mutate bag values should work on a cloned copy.
 type MetaContext struct {
 	RPC       string // "RunE", "Cancel", ...
 	TenantID  string
@@ -23,7 +26,16 @@ type MetaContext struct {
 	ReceivedAt time.Time // 서버가 받은 시각 (옵션)
 }
 
-// 편의 메서드 TODO 동시성 이슈가 있을지 확인하자.
+func (m MetaContext) Clone() MetaContext {
+	cp := m
+	if len(m.Bag) > 0 {
+		cp.Bag = make(map[string]string, len(m.Bag))
+		for k, v := range m.Bag {
+			cp.Bag[strings.ToLower(k)] = v
+		}
+	}
+	return cp
+}
 
 func (m *MetaContext) Get(k string) (string, bool) {
 	if m == nil || m.Bag == nil {

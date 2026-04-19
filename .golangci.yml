@@ -1,0 +1,88 @@
+version: "2"
+
+run:
+  allow-parallel-runners: true
+
+linters:
+  default: none
+
+  enable:
+    - copyloopvar
+    - dupl
+    - errcheck
+    - goconst
+    - gocognit
+    - gocyclo
+    - govet
+    - ineffassign
+    - lll
+    - misspell
+    - nakedret
+    - prealloc
+    - revive
+    - staticcheck
+    - unconvert
+    - unparam
+    - unused
+
+  settings:
+    gocognit:
+      min-complexity: 20
+
+    gocyclo:
+      min-complexity: 20
+
+    goconst:
+      min-len: 3
+      min-occurrences: 3
+
+    lll:
+      line-length: 140
+
+    revive:
+      rules:
+        - name: comment-spacings
+        - name: import-shadowing
+
+  exclusions:
+    generated: lax
+
+    rules:
+      - linters:
+          - dupl
+          - lll
+          - gocognit
+          - gocyclo
+          - unparam
+        path: ".*_test\\.go"
+
+      - linters:
+          - gocognit
+          - gocyclo
+        path: "cmd/imp/k8s_actor\\.go"
+
+      - linters:
+          - gocognit
+          - gocyclo
+        path: "pkg/dispatcher/dispatcher\\.go"
+
+      - linters:
+          - unused
+        path: "pkg/driver/driver\\.go"
+
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

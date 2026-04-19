@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
+	"log"
+	"os"
 	"time"
 
 	"github.com/seoyhaein/spawner/cmd/imp"
@@ -9,10 +12,14 @@ import (
 	"github.com/seoyhaein/spawner/pkg/api"
 	"github.com/seoyhaein/spawner/pkg/dispatcher"
 	"github.com/seoyhaein/spawner/pkg/driver"
+	sErr "github.com/seoyhaein/spawner/pkg/error"
 	"github.com/seoyhaein/spawner/pkg/factory"
 	fdr "github.com/seoyhaein/spawner/pkg/frontdoor"
 	ply "github.com/seoyhaein/spawner/pkg/policy"
+	"github.com/seoyhaein/spawner/pkg/store"
 )
+
+const defaultRunStorePath = "/tmp/spawner-runstore.json"
 
 func runRule() fdr.Rule {
 	return fdr.Rule{
@@ -23,37 +30,20 @@ func runRule() fdr.Rule {
 		},
 		BuildCmd: func(in fdr.ResolveInput) (api.Command, error) {
 			rs := in.Req.(*api.RunSpec)
-			return api.Command{
-				Kind:   api.CmdRun,
-				Run:    rs,
-				Policy: ply.DefaultPolicyB(5 * time.Minute),
-			}, nil
+			return api.NewRunCommand(rs, ply.DefaultPolicyB(5*time.Minute))
 		},
 	}
 }
 
-func main() {
-	rootCtx := context.Background()
+func runStorePath(getenv func(string) string) string {
+	if path := getenv("RUN_STORE_PATH"); path != "" {
+		return path
+	}
+	return defaultRunStorePath
+}
 
-	r := fdr.NewTableFrontDoor(runRule())
-
-	// 드라이버/액터 생성자 둘 다 주입
-	af := factory.NewFactory(
-		rootCtx,
-		func(key string) driver.Driver {
-			return imp.NewK8s("default") // DriverMaker
-		},
-		func(key string, d driver.Driver, mb int) actor.Actor {
-			return imp.NewK8sActor(key, d, mb) // ActorMaker
-		},
-		128,
-	)
-
-	// d := dispatcher.New(r, af, 2)
-	d := dispatcher.NewDispatcher(r, af, 2)
-	// d := dispatcher.NewDispatcher(r, af, 2, dispatcher.WithDefaultSink(mySink))
-
-	in := fdr.ResolveInput{
+func sampleInput() fdr.ResolveInput {
+	return fdr.ResolveInput{
 		Req: &api.RunSpec{
 			RunID:    "run-001",
 			ImageRef: "ghcr.io/acme/tool@sha256:deadbeef...",
@@ -71,9 +61,84 @@ func main() {
 			TraceID:   "trace-xyz",
 		},
 	}
+}
+
+func logBootstrap(recovered []dispatcher.RecoverableRun) {
+	if len(recovered) == 0 {
+		return
+	}
+	log.Printf("[server] bootstrap: %d run(s) pending re-dispatch", len(recovered))
+	// Recovery remains intentionally narrow: only queued or admitted runs with a
+	// valid run envelope are replay candidates. Fast-failed terminal runs are
+	// not auto-retried by bootstrap.
+}
+
+func main() {
+	rootCtx := context.Background()
+
+	// ── RunStore: durable-lite JsonRunStore for restart recovery ──────────────
+	// Queued/admitted runs survive process restart.
+	// ASSUMPTION: production replaces with PostgreSQL/Redis.
+	storePath := runStorePath(os.Getenv)
+	rs, err := store.NewJsonRunStore(storePath)
+	if err != nil {
+		log.Fatalf("runstore init: %v", err)
+	}
+	log.Printf("[server] RunStore: %s", storePath)
+
+	// ── Execution backend init: graceful init — no panic on failure ───────────
+	// If the backend is unreachable, NopDriver is used and Dispatcher marks
+	// backendAvailable=false.
+	// Incoming runs are held in the RunStore rather than dispatched to Actor.
+	// No execution API call is attempted against an unavailable backend.
+	//
+	// ASSUMPTION: a health-check loop (not shown here) calls d.SetBackendAvailable(true)
+	// and d.Bootstrap() once connectivity is restored.
+	var drvFn factory.DriverMaker
+	dispOpts := []dispatcher.Option{
+		dispatcher.WithRunStore(rs),
+	}
+
+	drv, k8sErr := imp.NewK8sFromKubeconfig("default", "")
+	if k8sErr != nil {
+		log.Printf("[server] WARN: backend init failed (%v) — NopDriver active; runs will be held", k8sErr)
+		drvFn = func(_ string) driver.Driver { return &imp.NopDriver{} }
+		dispOpts = append(dispOpts, dispatcher.WithBackendUnavailable())
+	} else {
+		log.Printf("[server] backend connected")
+		drvFn = func(_ string) driver.Driver { return drv }
+	}
+
+	r := fdr.NewTableFrontDoor(runRule())
+
+	af := factory.NewFactory(
+		drvFn,
+		func(key string, d driver.Driver, mb int) actor.Actor {
+			return imp.NewK8sActor(key, d, mb)
+		},
+		128,
+	)
+
+	d := dispatcher.NewDispatcher(r, af, 2, dispOpts...)
+
+	// ── Bootstrap: recover runs from previous process instance ────────────────
+	recovered, bootstrapErr := d.RecoverableRuns(rootCtx)
+	if bootstrapErr != nil {
+		log.Printf("[server] bootstrap error: %v", bootstrapErr)
+	} else {
+		logBootstrap(recovered)
+	}
+
+	// ── Example submission ────────────────────────────────────────────────────
+	in := sampleInput()
 
 	if err := d.Handle(rootCtx, in, nil); err != nil {
-		panic(err)
+		if errors.Is(err, sErr.ErrBackendUnavailable) {
+			log.Printf("[server] run-001 → held (backend unavailable; preserved in RunStore)")
+		} else {
+			log.Printf("[server] Handle error: %v", err)
+		}
+	} else {
+		log.Printf("[server] run-001 → admitted-to-dag")
 	}
-	time.Sleep(1 * time.Second)
 }
